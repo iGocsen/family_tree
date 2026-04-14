@@ -1,0 +1,187 @@
+@import "tailwindcss";
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(35 30% 97%);
+  --color-foreground: hsl(20 15% 15%);
+
+  --color-card: hsl(35 30% 98%);
+  --color-card-foreground: hsl(20 15% 15%);
+
+  --color-popover: hsl(35 30% 98%);
+  --color-popover-foreground: hsl(20 15% 15%);
+
+  --color-primary: hsl(0 55% 35%);
+  --color-primary-foreground: hsl(35 30% 97%);
+
+  --color-secondary: hsl(35 25% 90%);
+  --color-secondary-foreground: hsl(0 55% 35%);
+
+  --color-muted: hsl(35 20% 92%);
+  --color-muted-foreground: hsl(25 10% 50%);
+
+  --color-accent: hsl(40 70% 55%);
+  --color-accent-foreground: hsl(20 15% 15%);
+
+  --color-destructive: hsl(0 70% 50%);
+  --color-destructive-foreground: hsl(35 30% 97%);
+
+  --color-border: hsl(30 15% 85%);
+  --color-input: hsl(30 15% 85%);
+  --color-ring: hsl(0 55% 35%);
+
+  --color-sidebar: hsl(35 25% 94%);
+  --color-sidebar-foreground: hsl(20 15% 20%);
+  --color-sidebar-primary: hsl(0 55% 35%);
+  --color-sidebar-primary-foreground: hsl(35 30% 97%);
+  --color-sidebar-accent: hsl(35 20% 88%);
+  --color-sidebar-accent-foreground: hsl(0 55% 35%);
+  --color-sidebar-border: hsl(30 15% 82%);
+  --color-sidebar-ring: hsl(0 55% 35%);
+
+  --color-chart-1: hsl(0 55% 35%);
+  --color-chart-2: hsl(35 60% 40%);
+  --color-chart-3: hsl(15 45% 30%);
+  --color-chart-4: hsl(45 50% 45%);
+  --color-chart-5: hsl(25 40% 35%);
+
+  --radius: 0.5rem;
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+  --animate-fade-in: fade-in 0.5s ease-out;
+  --animate-slide-up: slide-up 0.4s ease-out;
+  --animate-slide-in-left: slide-in-left 0.3s ease-out;
+  --animate-scale-in: scale-in 0.3s ease-out;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+
+  @keyframes accordion-down {
+    from { height: 0; }
+    to { height: var(--radix-accordion-content-height); }
+  }
+
+  @keyframes accordion-up {
+    from { height: var(--radix-accordion-content-height); }
+    to { height: 0; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes slide-in-left {
+    from { opacity: 0; transform: translateX(-20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  @keyframes scale-in {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 5px hsla(40 70% 55% / 0.3); }
+    50% { box-shadow: 0 0 20px hsla(40 70% 55% / 0.6); }
+  }
+}
+
+.dark {
+  --color-background: hsl(20 15% 8%);
+  --color-foreground: hsl(35 30% 92%);
+
+  --color-card: hsl(20 12% 12%);
+  --color-card-foreground: hsl(35 30% 92%);
+
+  --color-popover: hsl(20 12% 12%);
+  --color-popover-foreground: hsl(35 30% 92%);
+
+  --color-primary: hsl(0 55% 50%);
+  --color-primary-foreground: hsl(20 15% 8%);
+
+  --color-secondary: hsl(25 15% 18%);
+  --color-secondary-foreground: hsl(35 30% 92%);
+
+  --color-muted: hsl(25 12% 16%);
+  --color-muted-foreground: hsl(30 10% 55%);
+
+  --color-accent: hsl(40 60% 50%);
+  --color-accent-foreground: hsl(20 15% 8%);
+
+  --color-destructive: hsl(0 65% 55%);
+  --color-destructive-foreground: hsl(35 30% 92%);
+
+  --color-border: hsl(25 12% 20%);
+  --color-input: hsl(25 12% 20%);
+  --color-ring: hsl(0 55% 50%);
+
+  --color-sidebar: hsl(20 12% 10%);
+  --color-sidebar-foreground: hsl(35 25% 85%);
+  --color-sidebar-primary: hsl(0 55% 50%);
+  --color-sidebar-primary-foreground: hsl(20 15% 8%);
+  --color-sidebar-accent: hsl(25 15% 16%);
+  --color-sidebar-accent-foreground: hsl(35 25% 85%);
+  --color-sidebar-border: hsl(25 12% 18%);
+  --color-sidebar-ring: hsl(0 55% 50%);
+
+  --color-chart-1: hsl(0 55% 50%);
+  --color-chart-2: hsl(35 55% 45%);
+  --color-chart-3: hsl(15 40% 40%);
+  --color-chart-4: hsl(45 45% 50%);
+  --color-chart-5: hsl(25 35% 45%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Noto Serif SC", "Noto Sans SC", "Source Han Serif SC", "STSong", serif;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(30 15% 75%);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(30 15% 60%);
+}
+
+/* Tree connector lines */
+.tree-children {
+  position: relative;
+}
+
+.tree-children::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(50% - 1px);
+  width: 2px;
+  height: 16px;
+  background: hsl(30 15% 75%);
+}
