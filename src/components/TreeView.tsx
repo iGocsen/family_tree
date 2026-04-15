@@ -9,6 +9,7 @@ interface TreeViewProps {
   onSelectPerson: (person: Person) => void;
   onBranchClick: (person: Person) => void;
   selectedPersonId: string | null;
+  visibleRange: { minGen: number; maxGen: number };
   depth?: number;
 }
 
@@ -20,12 +21,19 @@ export default function TreeView({
   onSelectPerson,
   onBranchClick,
   selectedPersonId,
+  visibleRange,
   depth = 0,
 }: TreeViewProps) {
   const children = getChildren(genealogyId, person.id);
   const hasChildren = children.length > 0;
   const isExpanded = expandedGenerations.has(person.generation);
   const isSelected = selectedPersonId === person.id;
+  const isInRange = person.generation >= visibleRange.minGen && person.generation <= visibleRange.maxGen;
+  const isAtBottom = person.generation === visibleRange.maxGen;
+  const isAtTop = person.generation === visibleRange.minGen && visibleRange.minGen > 1;
+
+  // Don't render if outside visible range
+  if (!isInRange) return null;
 
   const toggleGeneration = () => {
     setExpandedGenerations(prev => {
@@ -38,6 +46,10 @@ export default function TreeView({
       return next;
     });
   };
+
+  // Filter children to only those within visible range
+  const visibleChildren = children.filter(c => c.generation <= visibleRange.maxGen);
+  const hasMoreBelow = children.length > 0 && children.some(c => c.generation > visibleRange.maxGen);
 
   return (
     <div className="flex flex-col items-center">
@@ -76,6 +88,14 @@ export default function TreeView({
         )}
       </button>
 
+      {/* More above indicator */}
+      {isAtTop && (
+        <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 bg-secondary/80 rounded-full">
+          <ChevronDown className="w-2.5 h-2.5 text-muted-foreground" />
+          <span className="text-[10px] text-muted-foreground">上方还有祖先</span>
+        </div>
+      )}
+
       {/* Children with connectors */}
       {hasChildren && (
         <>
@@ -85,19 +105,21 @@ export default function TreeView({
           {isExpanded ? (
             <>
               {/* Horizontal connector bar */}
-              <div className="relative w-full flex justify-center">
-                <div
-                  className="absolute top-0 h-px bg-border"
-                  style={{
-                    left: children.length === 1 ? '50%' : `${100 / (children.length * 2)}%`,
-                    right: children.length === 1 ? '50%' : `${100 / (children.length * 2)}%`,
-                  }}
-                />
-              </div>
+              {visibleChildren.length > 1 && (
+                <div className="relative w-full flex justify-center">
+                  <div
+                    className="absolute top-0 h-px bg-border"
+                    style={{
+                      left: `${100 / (visibleChildren.length * 2)}%`,
+                      right: `${100 / (visibleChildren.length * 2)}%`,
+                    }}
+                  />
+                </div>
+              )}
 
               {/* Children row */}
               <div className="flex justify-center gap-3 pt-0">
-                {children.map(child => (
+                {visibleChildren.map(child => (
                   <div key={child.id} className="flex flex-col items-center">
                     {/* Vertical line to child */}
                     <div className="w-px h-4 bg-border" />
@@ -109,11 +131,20 @@ export default function TreeView({
                       onSelectPerson={onSelectPerson}
                       onBranchClick={onBranchClick}
                       selectedPersonId={selectedPersonId}
+                      visibleRange={visibleRange}
                       depth={depth + 1}
                     />
                   </div>
                 ))}
               </div>
+
+              {/* More below indicator */}
+              {hasMoreBelow && (
+                <div className="mt-2 inline-flex items-center gap-1 px-2 py-0.5 bg-secondary/80 rounded-full">
+                  <ChevronDown className="w-2.5 h-2.5 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">下方还有更多世系</span>
+                </div>
+              )}
             </>
           ) : (
             <button
@@ -121,7 +152,7 @@ export default function TreeView({
               className="mt-2 inline-flex items-center gap-1 px-3 py-1 bg-secondary border border-border rounded-full text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors"
             >
               <ChevronRight className="w-3 h-3" />
-              展开 {children.length} 位子嗣
+              展开 {visibleChildren.length} 位子嗣
             </button>
           )}
         </>

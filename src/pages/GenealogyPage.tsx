@@ -1,14 +1,13 @@
-import { useState, useMemo, useCallback } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getGenealogy, getPerson, searchPerson, getChildren, getRootPerson, Person } from '@/lib/data';
-import { Search, ChevronLeft, ChevronRight, User, X, ArrowLeft, TreePine, AlertCircle } from 'lucide-react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useParams, Link } from 'react-router-dom';
+import { getGenealogy, searchPerson, getChildren, getRootPerson, Person } from '@/lib/data';
+import { Search, ChevronLeft, ChevronRight, User, ArrowLeft, TreePine, AlertCircle, ChevronUp } from 'lucide-react';
 import TreeView from '@/components/TreeView';
 import PersonDetail from '@/components/PersonDetail';
 import FeedbackDialog from '@/components/FeedbackDialog';
 
 export default function GenealogyPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const genealogy = getGenealogy(id || '');
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,9 +17,18 @@ export default function GenealogyPage() {
   const [expandedGenerations, setExpandedGenerations] = useState<Set<number>>(new Set([1]));
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
-
-  // Breadcrumb state for branch navigation
   const [branchPath, setBranchPath] = useState<Person[]>([]);
+
+  // Default to ancestor on mount
+  useEffect(() => {
+    if (genealogy && !selectedPerson) {
+      const root = getRootPerson(genealogy.id);
+      if (root) {
+        setSelectedPerson(root);
+        setSelectedBranch(root.id);
+      }
+    }
+  }, [genealogy, selectedPerson]);
 
   if (!genealogy) {
     return (
@@ -52,6 +60,11 @@ export default function GenealogyPage() {
 
   const handleSelectPerson = useCallback((person: Person) => {
     setSelectedPerson(person);
+    setExpandedGenerations(prev => {
+      const next = new Set(prev);
+      for (let g = 1; g <= person.generation; g++) next.add(g);
+      return next;
+    });
     setSearchResults([]);
     setIsSearching(false);
     setSearchQuery('');
@@ -87,6 +100,27 @@ export default function GenealogyPage() {
     if (!selectedBranch) return [];
     return getChildren(genealogy.id, selectedBranch);
   }, [genealogy.id, selectedBranch]);
+
+  // Compute visible range: selected person's generation ± 3
+  const visibleRange = useMemo(() => {
+    if (!selectedPerson) return { minGen: 1, maxGen: 7 };
+    const center = selectedPerson.generation;
+    return {
+      minGen: Math.max(1, center - 3),
+      maxGen: Math.min(9, center + 3),
+    };
+  }, [selectedPerson]);
+
+  // Auto-expand generations within visible range
+  useEffect(() => {
+    setExpandedGenerations(prev => {
+      const next = new Set(prev);
+      for (let g = visibleRange.minGen; g <= visibleRange.maxGen; g++) {
+        next.add(g);
+      }
+      return next;
+    });
+  }, [visibleRange]);
 
   const rootPerson = getRootPerson(genealogy.id);
 
@@ -158,12 +192,44 @@ export default function GenealogyPage() {
                   <TreePine className="w-5 h-5 text-primary" />
                   <h2 className="text-lg font-semibold text-foreground">世系树图</h2>
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  共 {Object.keys(genealogy.people).length} 人
-                </span>
+                <div className="flex items-center gap-3">
+                  {selectedPerson && (
+                    <span className="text-xs text-muted-foreground bg-secondary px-2 py-1 rounded-full">
+                      显示：第{visibleRange.minGen}世 — 第{visibleRange.maxGen}世
+                    </span>
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    共 {Object.keys(genealogy.people).length} 人
+                  </span>
+                </div>
               </div>
+
+              {/* Generation indicator */}
+              {selectedPerson && (
+                <div className="px-6 py-2 bg-secondary/30 border-b border-border flex items-center gap-2 overflow-x-auto">
+                  {Array.from({ length: 9 }, (_, i) => i + 1).map(gen => {
+                    const isActive = gen === selectedPerson.generation;
+                    const isInRange = gen >= visibleRange.minGen && gen <= visibleRange.maxGen;
+                    return (
+                      <div
+                        key={gen}
+                        className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
+                          isActive
+                            ? 'bg-primary text-primary-foreground shadow-md'
+                            : isInRange
+                              ? 'bg-secondary text-secondary-foreground'
+                              : 'text-muted-foreground/40'
+                        }`}
+                      >
+                        {gen}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="p-6 overflow-x-auto">
-                {rootPerson && (
+                {rootPerson ? (
                   <TreeView
                     genealogyId={genealogy.id}
                     person={rootPerson}
@@ -172,7 +238,12 @@ export default function GenealogyPage() {
                     onSelectPerson={handleSelectPerson}
                     onBranchClick={handleBranchClick}
                     selectedPersonId={selectedPerson?.id || null}
+                    visibleRange={visibleRange}
                   />
+                ) : (
+                  <div className="text-center text-muted-foreground py-12">
+                    <p>暂无世系数据</p>
+                  </div>
                 )}
               </div>
             </div>

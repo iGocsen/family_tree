@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X, AlertTriangle, Send, CheckCircle2 } from 'lucide-react';
+import { saveFeedback } from '@/lib/store';
 
 interface FeedbackDialogProps {
   genealogyId: string;
@@ -10,6 +11,13 @@ interface FeedbackDialogProps {
 }
 
 type FeedbackType = 'info-error' | 'missing-info' | 'duplicate' | 'other';
+
+const feedbackTypeLabels: Record<FeedbackType, string> = {
+  'info-error': '信息有误',
+  'missing-info': '信息缺失',
+  'duplicate': '重复记录',
+  'other': '其他问题',
+};
 
 export default function FeedbackDialog({
   genealogyId,
@@ -37,34 +45,22 @@ export default function FeedbackDialog({
 
     setIsSubmitting(true);
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // In production, this would be:
-    // await fetch('/api/feedback', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     genealogyId,
-    //     personId,
-    //     feedbackType,
-    //     description,
-    //     contact,
-    //   }),
-    // });
-
-    console.log('Feedback submitted:', {
-      genealogyId,
-      genealogyName,
-      personId,
-      personName,
-      feedbackType,
-      description,
-      contact,
-    });
-
-    setIsSubmitting(false);
-    setIsSubmitted(true);
+    try {
+      saveFeedback({
+        genealogyId,
+        genealogyName,
+        personId,
+        personName,
+        feedbackType,
+        description,
+        contact,
+      });
+      setIsSubmitted(true);
+    } catch (err) {
+      console.error('Failed to save feedback:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (isSubmitted) {

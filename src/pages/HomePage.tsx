@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { genealogies } from '@/lib/data';
-import { BookOpen, ArrowRight, Users, Calendar, MapPin } from 'lucide-react';
+import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings } from 'lucide-react';
 
 export default function HomePage() {
   return (
@@ -84,10 +84,19 @@ export default function HomePage() {
       </div>
 
       {/* Footer */}
-      <div className="border-t border-border py-8 text-center">
-        <p className="text-sm text-muted-foreground">
-          慎终追远 · 民德归厚
-        </p>
+      <div className="border-t border-border py-8">
+        <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            慎终追远 · 民德归厚
+          </p>
+          <Link
+            to="/admin"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Settings className="w-4 h-4" />
+            管理后台
+          </Link>
+        </div>
       </div>
     </div>
   );
