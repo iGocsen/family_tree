@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getGenealogy, searchPerson, getChildren, getRootPerson, Person, getAncestorChain, getPersonsByGeneration } from '@/lib/data';
+import { getGenealogy, searchPerson, getChildren, getRootPerson, Person, getAncestorChain, getPersonsByGeneration, getTreeRoots } from '@/lib/data';
 import { Search, ChevronLeft, ChevronRight, User, ArrowLeft, TreePine, AlertCircle } from 'lucide-react';
 import TreeView from '@/components/TreeView';
 import PersonDetail from '@/components/PersonDetail';
@@ -15,8 +15,9 @@ export default function GenealogyPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState<Person | null>(null);
   const [expandedGenerations, setExpandedGenerations] = useState<Set<number>>(new Set([1]));
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
+
+  // Branch navigation: track the path of clicked descendants
   const [branchPath, setBranchPath] = useState<Person[]>([]);
 
   // Default to ancestor on mount
@@ -25,7 +26,7 @@ export default function GenealogyPage() {
       const root = getRootPerson(genealogy.id);
       if (root) {
         setSelectedPerson(root);
-        setSelectedBranch(root.id);
+        setBranchPath([root]);
       }
     }
   }, [genealogy, selectedPerson]);
@@ -58,8 +59,15 @@ export default function GenealogyPage() {
     }
   }, [genealogy.id]);
 
+  /**
+   * When a person is selected (from search or tree click):
+   * - Set as selected person
+   * - Reset branch navigation to just this person
+   * - Expand generations from minGen to selected person's generation
+   */
   const handleSelectPerson = useCallback((person: Person) => {
     setSelectedPerson(person);
+    setBranchPath([person]);
     setExpandedGenerations(prev => {
       const next = new Set(prev);
       const minGen = Math.max(1, person.generation - 3);
@@ -71,36 +79,35 @@ export default function GenealogyPage() {
     setSearchQuery('');
   }, []);
 
-  const handleBranchClick = useCallback((person: Person) => {
-    setSelectedBranch(person.id);
-    setSelectedPerson(person);
-  }, []);
-
+  /**
+   * Navigate deeper into a branch (click a child in branch detail)
+   */
   const handleNavigateBranch = useCallback((person: Person) => {
     const newPath = [...branchPath, person];
     setBranchPath(newPath);
-    setSelectedBranch(person.id);
     setSelectedPerson(person);
   }, [branchPath]);
 
+  /**
+   * Go back one level in branch navigation
+   */
   const handleBackBranch = useCallback(() => {
     if (branchPath.length > 1) {
       const newPath = branchPath.slice(0, -1);
       setBranchPath(newPath);
       const prevPerson = newPath[newPath.length - 1];
-      setSelectedBranch(prevPerson.id);
       setSelectedPerson(prevPerson);
-    } else {
-      setBranchPath([]);
-      setSelectedBranch(null);
-      setSelectedPerson(null);
     }
   }, [branchPath]);
 
+  /**
+   * Get children of the currently selected person (for branch detail)
+   * Uses selectedPerson directly, NOT selectedBranch, to avoid stale state
+   */
   const currentBranchChildren = useMemo(() => {
-    if (!selectedBranch) return [];
-    return getChildren(genealogy.id, selectedBranch);
-  }, [genealogy.id, selectedBranch]);
+    if (!selectedPerson) return [];
+    return getChildren(genealogy.id, selectedPerson.id);
+  }, [genealogy.id, selectedPerson]);
 
   // Compute visible range: selected person's generation -3 to +2
   const visibleRange = useMemo(() => {
@@ -111,33 +118,14 @@ export default function GenealogyPage() {
     };
   }, [selectedPerson]);
 
-  // Get tree root nodes at minGen
+  // Get tree root nodes at minGen (the ancestor at minGen and their siblings)
   const treeRoots = useMemo(() => {
     if (!selectedPerson) {
       const root = getRootPerson(genealogy.id);
       return root ? [root] : [];
     }
-
-    const chain = getAncestorChain(genealogy.id, selectedPerson.id);
-    const ancestorAtMinGen = chain.find(p => p.generation === visibleRange.minGen);
-
-    if (visibleRange.minGen === 1) {
-      return getPersonsByGeneration(genealogy.id, 1);
-    }
-
-    if (ancestorAtMinGen) {
-      // Get siblings of the ancestor at minGen
-      const ancestorParentId = ancestorAtMinGen.parentId;
-      if (ancestorParentId) {
-        return getPersonsByGeneration(genealogy.id, visibleRange.minGen)
-          .filter(p => p.parentId === ancestorParentId);
-      }
-      return [ancestorAtMinGen];
-    }
-
-    // Fallback: get persons at minGen who are ancestors
-    return chain.filter(p => p.generation === visibleRange.minGen);
-  }, [genealogy.id, selectedPerson, visibleRange.minGen]);
+    return getTreeRoots(genealogy.id, selectedPerson, visibleRange.minGen, visibleRange.maxGen);
+  }, [genealogy.id, selectedPerson, visibleRange.minGen, visibleRange.maxGen]);
 
   // Auto-expand generations within visible range
   useEffect(() => {
@@ -240,7 +228,6 @@ export default function GenealogyPage() {
                       <button
                         key={gen}
                         onClick={() => {
-                          // Find a person at this generation in the ancestor chain
                           const chain = getAncestorChain(genealogy.id, selectedPerson.id);
                           const personAtGen = chain.find(p => p.generation === gen);
                           if (personAtGen) {
@@ -274,7 +261,6 @@ export default function GenealogyPage() {
                         expandedGenerations={expandedGenerations}
                         setExpandedGenerations={setExpandedGenerations}
                         onSelectPerson={handleSelectPerson}
-                        onBranchClick={handleBranchClick}
                         selectedPersonId={selectedPerson?.id || null}
                         visibleRange={visibleRange}
                       />
@@ -289,12 +275,12 @@ export default function GenealogyPage() {
             </div>
 
             {/* Branch Navigation */}
-            {selectedBranch && (
+            {selectedPerson && (
               <div className="mt-6 bg-card border border-border rounded-xl overflow-hidden animate-scale-in">
                 <div className="px-6 py-4 border-b border-border flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <h3 className="text-lg font-semibold text-foreground">分支详情</h3>
-                    {branchPath.length > 0 && (
+                    {branchPath.length > 1 && (
                       <div className="flex items-center gap-1 ml-4">
                         {branchPath.map((p, i) => (
                           <span key={p.id} className="flex items-center gap-1 text-sm">
@@ -304,7 +290,6 @@ export default function GenealogyPage() {
                                 const newPath = branchPath.slice(0, i + 1);
                                 setBranchPath(newPath);
                                 setSelectedPerson(p);
-                                setSelectedBranch(p.id);
                               }}
                               className={`hover:text-primary transition-colors ${i === branchPath.length - 1 ? 'text-primary font-medium' : 'text-muted-foreground'}`}
                             >
@@ -315,7 +300,7 @@ export default function GenealogyPage() {
                       </div>
                     )}
                   </div>
-                  {branchPath.length > 0 && (
+                  {branchPath.length > 1 && (
                     <button
                       onClick={handleBackBranch}
                       className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -328,7 +313,7 @@ export default function GenealogyPage() {
                 {currentBranchChildren.length > 0 ? (
                   <div className="p-6">
                     <p className="text-sm text-muted-foreground mb-4">
-                      {selectedPerson?.name} 的子嗣（共 {currentBranchChildren.length} 人）
+                      {selectedPerson.name} 的子嗣（共 {currentBranchChildren.length} 人）
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                       {currentBranchChildren.map(child => (

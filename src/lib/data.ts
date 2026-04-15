@@ -173,14 +173,71 @@ const chenPeople = buildPeople([
   { id: 'chen-9h', name: '陈建金', generation: 9, birthYear: '1948', deathYear: '2028', gender: 'male', biography: '九世，字金融。金融学家，曾任证监会副主席。', achievements: ['证监会副主席'], parentId: 'chen-8g' },
 ]);
 
+// Export base genealogies for HomePage display
 export const genealogies: Genealogy[] = [
   { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', foundingYear: '1680', ancestor: liPeople['li-1'], people: liPeople },
   { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', foundingYear: '1690', ancestor: zhangPeople['zhang-1'], people: zhangPeople },
   { id: 'chen', name: '陈氏族谱', description: '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', origin: '河南 → 四川成都', foundingYear: '1700', ancestor: chenPeople['chen-1'], people: chenPeople },
 ];
 
+// Cache for merged genealogies
+let mergedCache: Record<string, { genealogy: Genealogy; timestamp: number }> = {};
+
+/**
+ * Get genealogy with approved new persons merged in.
+ * Reads from localStorage for approved persons and merges them into the base data.
+ */
 export function getGenealogy(id: string): Genealogy | undefined {
-  return genealogies.find(g => g.id === id);
+  const base = genealogies.find(g => g.id === id);
+  if (!base) return undefined;
+
+  // Check cache (5 second TTL)
+  const cached = mergedCache[id];
+  if (cached && Date.now() - cached.timestamp < 5000) {
+    return cached.genealogy;
+  }
+
+  // Read approved persons from localStorage
+  let approvedPersons: any[] = [];
+  try {
+    const data = localStorage.getItem('genealogy_new_persons');
+    if (data) {
+      approvedPersons = JSON.parse(data).filter((p: any) => p.genealogyId === id && p.status === 'approved');
+    }
+  } catch {
+    // ignore
+  }
+
+  if (approvedPersons.length === 0) {
+    mergedCache[id] = { genealogy: base, timestamp: Date.now() };
+    return base;
+  }
+
+  // Merge approved persons into the people record
+  const mergedPeople = { ...base.people };
+  for (const ap of approvedPersons) {
+    const person: Person = {
+      id: ap.id,
+      name: ap.name,
+      generation: ap.generation,
+      birthYear: ap.birthYear || undefined,
+      deathYear: ap.deathYear || undefined,
+      gender: ap.gender,
+      spouse: ap.spouse || undefined,
+      parentId: ap.parentId || undefined,
+      biography: ap.biography,
+      achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+    };
+    mergedPeople[ap.id] = person;
+  }
+
+  const merged: Genealogy = {
+    ...base,
+    people: mergedPeople,
+  };
+
+  mergedCache[id] = { genealogy: merged, timestamp: Date.now() };
+  return merged;
 }
 
 export function searchPerson(genealogyId: string, query: string): Person[] {
@@ -210,7 +267,7 @@ export function getChildren(genealogyId: string, parentId: string): Person[] {
 
 /**
  * Get ancestor chain from a person up to the root
- * Returns [person, parent, grandparent, ...]
+ * Returns [root, ..., grandparent, parent, person]
  */
 export function getAncestorChain(genealogyId: string, personId: string): Person[] {
   const genealogy = getGenealogy(genealogyId);
@@ -249,40 +306,27 @@ export function getPersonsByGeneration(genealogyId: string, generation: number):
 }
 
 /**
- * Build tree data for rendering: given a selected person, get the display tree
- * starting from minGen (person.generation - 3) to maxGen (person.generation + 2)
- * Returns the root nodes at minGen that are ancestors or siblings of the selected person
+ * Build tree roots for rendering.
+ * Given a selected person, find the ancestor at minGen, then return that ancestor
+ * and all their siblings (same parent) at minGen.
  */
 export function getTreeRoots(genealogyId: string, selectedPerson: Person, minGen: number, maxGen: number): Person[] {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return [];
 
-  // Get all persons at minGen
-  const minGenPersons = getPersonsByGeneration(genealogyId, minGen);
-
-  // Get the ancestor chain of the selected person
   const chain = getAncestorChain(genealogyId, selectedPerson.id);
   const ancestorAtMinGen = chain.find(p => p.generation === minGen);
 
-  if (ancestorAtMinGen) {
-    // If there's an ancestor at minGen, we need to also include their siblings
-    // (i.e., all persons at minGen whose parent is the same as the ancestor's parent,
-    // or if ancestor is at gen 1, all gen 1 persons)
-    if (minGen === 1) {
-      return minGenPersons;
-    }
-    // Find siblings of the ancestor at minGen (same parent)
-    const ancestorParentId = ancestorAtMinGen.parentId;
-    if (ancestorParentId) {
-      return minGenPersons.filter(p => p.parentId === ancestorParentId);
-    }
-    return [ancestorAtMinGen];
+  if (!ancestorAtMinGen) return [];
+
+  if (minGen === 1) {
+    return getPersonsByGeneration(genealogyId, 1);
   }
 
-  // If no ancestor at minGen (shouldn't happen if minGen <= selectedPerson.generation)
-  // fallback to persons at minGen who are ancestors of selected person
-  return minGenPersons.filter(p => {
-    // Check if this person is an ancestor of selectedPerson
-    return chain.some(a => a.id === p.id);
-  });
+  const ancestorParentId = ancestorAtMinGen.parentId;
+  if (ancestorParentId) {
+    return getPersonsByGeneration(genealogyId, minGen).filter(p => p.parentId === ancestorParentId);
+  }
+
+  return [ancestorAtMinGen];
 }
