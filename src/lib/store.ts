@@ -1,3 +1,5 @@
+import { Person, Genealogy, genealogies } from '@/lib/data';
+
 export interface FeedbackRecord {
   id: string;
   genealogyId: string;
@@ -39,9 +41,51 @@ export interface NewPersonData {
   achievements: string;
 }
 
+export interface ApprovedPerson extends NewPersonData {
+  id: string;
+  status: 'approved';
+  createdAt: string;
+  approvedAt: string;
+}
+
 const FEEDBACKS_KEY = 'genealogy_feedbacks';
 const EDITS_KEY = 'genealogy_edits';
 const NEW_PERSONS_KEY = 'genealogy_new_persons';
+const AUTH_KEY = 'genealogy_admin_auth';
+
+// ===== Auth =====
+export function login(username: string, password: string): boolean {
+  if (username === 'admin' && password === 'password') {
+    const auth = {
+      loggedIn: true,
+      loginTime: Date.now(),
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+    };
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+    return true;
+  }
+  return false;
+}
+
+export function logout(): void {
+  localStorage.removeItem(AUTH_KEY);
+}
+
+export function isAuthenticated(): boolean {
+  try {
+    const data = localStorage.getItem(AUTH_KEY);
+    if (!data) return false;
+    const auth = JSON.parse(data);
+    if (!auth.loggedIn) return false;
+    if (Date.now() > auth.expiresAt) {
+      localStorage.removeItem(AUTH_KEY);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ===== Feedback Store =====
 export function saveFeedback(feedback: Omit<FeedbackRecord, 'id' | 'status' | 'createdAt'>): FeedbackRecord {
@@ -149,6 +193,18 @@ export function updateNewPersonStatus(id: string, status: string): void {
   const idx = persons.findIndex(p => p.id === id);
   if (idx !== -1) {
     persons[idx].status = status;
+    if (status === 'approved') {
+      (persons[idx] as any).approvedAt = new Date().toISOString();
+    }
+    localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons));
+  }
+}
+
+export function modifyNewPerson(id: string, updates: Partial<NewPersonData>): void {
+  const persons = getNewPersons();
+  const idx = persons.findIndex(p => p.id === id);
+  if (idx !== -1) {
+    persons[idx] = { ...persons[idx], ...updates };
     localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons));
   }
 }
@@ -156,6 +212,37 @@ export function updateNewPersonStatus(id: string, status: string): void {
 export function deleteNewPerson(id: string): void {
   const persons = getNewPersons().filter(p => p.id !== id);
   localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons));
+}
+
+// ===== Get approved persons merged with genealogy =====
+export function getGenealogyWithApprovedPersons(genealogyId: string): Genealogy | undefined {
+  const base = genealogies.find(g => g.id === genealogyId);
+  if (!base) return undefined;
+
+  const approvedPersons = getNewPersons().filter(p => p.genealogyId === genealogyId && p.status === 'approved');
+  if (approvedPersons.length === 0) return base;
+
+  const mergedPeople = { ...base.people };
+  for (const ap of approvedPersons) {
+    const person: Person = {
+      id: ap.id,
+      name: ap.name,
+      generation: ap.generation,
+      birthYear: ap.birthYear || undefined,
+      deathYear: ap.deathYear || undefined,
+      gender: ap.gender,
+      spouse: ap.spouse || undefined,
+      parentId: ap.parentId || undefined,
+      biography: ap.biography,
+      achievements: ap.achievements ? ap.achievements.split('\n').filter(a => a.trim()) : undefined,
+    };
+    mergedPeople[ap.id] = person;
+  }
+
+  return {
+    ...base,
+    people: mergedPeople,
+  };
 }
 
 // ===== Stats =====

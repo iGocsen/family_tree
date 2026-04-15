@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getGenealogy, searchPerson, getChildren, getRootPerson, Person } from '@/lib/data';
-import { Search, ChevronLeft, ChevronRight, User, ArrowLeft, TreePine, AlertCircle, ChevronUp } from 'lucide-react';
+import { getGenealogy, searchPerson, getChildren, getRootPerson, Person, getAncestorChain, getPersonsByGeneration } from '@/lib/data';
+import { Search, ChevronLeft, ChevronRight, User, ArrowLeft, TreePine, AlertCircle } from 'lucide-react';
 import TreeView from '@/components/TreeView';
 import PersonDetail from '@/components/PersonDetail';
 import FeedbackDialog from '@/components/FeedbackDialog';
@@ -62,7 +62,8 @@ export default function GenealogyPage() {
     setSelectedPerson(person);
     setExpandedGenerations(prev => {
       const next = new Set(prev);
-      for (let g = 1; g <= person.generation; g++) next.add(g);
+      const minGen = Math.max(1, person.generation - 3);
+      for (let g = minGen; g <= person.generation; g++) next.add(g);
       return next;
     });
     setSearchResults([]);
@@ -101,15 +102,42 @@ export default function GenealogyPage() {
     return getChildren(genealogy.id, selectedBranch);
   }, [genealogy.id, selectedBranch]);
 
-  // Compute visible range: selected person's generation ± 3
+  // Compute visible range: selected person's generation -3 to +2
   const visibleRange = useMemo(() => {
     if (!selectedPerson) return { minGen: 1, maxGen: 7 };
-    const center = selectedPerson.generation;
     return {
-      minGen: Math.max(1, center - 3),
-      maxGen: Math.min(9, center + 3),
+      minGen: Math.max(1, selectedPerson.generation - 3),
+      maxGen: Math.min(15, selectedPerson.generation + 2),
     };
   }, [selectedPerson]);
+
+  // Get tree root nodes at minGen
+  const treeRoots = useMemo(() => {
+    if (!selectedPerson) {
+      const root = getRootPerson(genealogy.id);
+      return root ? [root] : [];
+    }
+
+    const chain = getAncestorChain(genealogy.id, selectedPerson.id);
+    const ancestorAtMinGen = chain.find(p => p.generation === visibleRange.minGen);
+
+    if (visibleRange.minGen === 1) {
+      return getPersonsByGeneration(genealogy.id, 1);
+    }
+
+    if (ancestorAtMinGen) {
+      // Get siblings of the ancestor at minGen
+      const ancestorParentId = ancestorAtMinGen.parentId;
+      if (ancestorParentId) {
+        return getPersonsByGeneration(genealogy.id, visibleRange.minGen)
+          .filter(p => p.parentId === ancestorParentId);
+      }
+      return [ancestorAtMinGen];
+    }
+
+    // Fallback: get persons at minGen who are ancestors
+    return chain.filter(p => p.generation === visibleRange.minGen);
+  }, [genealogy.id, selectedPerson, visibleRange.minGen]);
 
   // Auto-expand generations within visible range
   useEffect(() => {
@@ -121,8 +149,6 @@ export default function GenealogyPage() {
       return next;
     });
   }, [visibleRange]);
-
-  const rootPerson = getRootPerson(genealogy.id);
 
   return (
     <div className="min-h-screen bg-background">
@@ -204,42 +230,56 @@ export default function GenealogyPage() {
                 </div>
               </div>
 
-              {/* Generation indicator */}
+              {/* Generation indicator - clickable */}
               {selectedPerson && (
                 <div className="px-6 py-2 bg-secondary/30 border-b border-border flex items-center gap-2 overflow-x-auto">
-                  {Array.from({ length: 9 }, (_, i) => i + 1).map(gen => {
+                  {Array.from({ length: 15 }, (_, i) => i + 1).map(gen => {
                     const isActive = gen === selectedPerson.generation;
                     const isInRange = gen >= visibleRange.minGen && gen <= visibleRange.maxGen;
                     return (
-                      <div
+                      <button
                         key={gen}
+                        onClick={() => {
+                          // Find a person at this generation in the ancestor chain
+                          const chain = getAncestorChain(genealogy.id, selectedPerson.id);
+                          const personAtGen = chain.find(p => p.generation === gen);
+                          if (personAtGen) {
+                            handleSelectPerson(personAtGen);
+                          }
+                        }}
                         className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
                           isActive
-                            ? 'bg-primary text-primary-foreground shadow-md'
+                            ? 'bg-primary text-primary-foreground shadow-md cursor-pointer'
                             : isInRange
-                              ? 'bg-secondary text-secondary-foreground'
-                              : 'text-muted-foreground/40'
+                              ? 'bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer'
+                              : 'text-muted-foreground/40 cursor-default'
                         }`}
                       >
                         {gen}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
               )}
 
               <div className="p-6 overflow-x-auto">
-                {rootPerson ? (
-                  <TreeView
-                    genealogyId={genealogy.id}
-                    person={rootPerson}
-                    expandedGenerations={expandedGenerations}
-                    setExpandedGenerations={setExpandedGenerations}
-                    onSelectPerson={handleSelectPerson}
-                    onBranchClick={handleBranchClick}
-                    selectedPersonId={selectedPerson?.id || null}
-                    visibleRange={visibleRange}
-                  />
+                {treeRoots.length > 0 ? (
+                  <div className="flex justify-center gap-6">
+                    {treeRoots.map(root => (
+                      <TreeView
+                        key={root.id}
+                        genealogyId={genealogy.id}
+                        people={genealogy.people}
+                        person={root}
+                        expandedGenerations={expandedGenerations}
+                        setExpandedGenerations={setExpandedGenerations}
+                        onSelectPerson={handleSelectPerson}
+                        onBranchClick={handleBranchClick}
+                        selectedPersonId={selectedPerson?.id || null}
+                        visibleRange={visibleRange}
+                      />
+                    ))}
+                  </div>
                 ) : (
                   <div className="text-center text-muted-foreground py-12">
                     <p>暂无世系数据</p>
