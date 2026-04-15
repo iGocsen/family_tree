@@ -9,19 +9,15 @@ interface PersonDetailProps {
 
 export default function PersonDetail({ person, genealogyId, onFeedback }: PersonDetailProps) {
   const children = getChildren(genealogyId, person.id);
-  const parentName = person.parentId ? null : null; // Would need parent lookup
 
   return (
     <div className="space-y-6 animate-slide-up">
       {/* Profile Card */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        {/* Header */}
         <div className="relative bg-gradient-to-br from-primary/10 via-primary/5 to-transparent p-6 pb-8">
           <div className="flex items-start gap-4">
             <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold shadow-lg ${
-              person.gender === 'male'
-                ? 'bg-primary/20 text-primary'
-                : 'bg-accent/20 text-accent'
+              person.gender === 'male' ? 'bg-primary/20 text-primary' : 'bg-accent/20 text-accent'
             }`}>
               {person.name.charAt(0)}
             </div>
@@ -41,32 +37,24 @@ export default function PersonDetail({ person, genealogyId, onFeedback }: Person
             </div>
           </div>
         </div>
-
-        {/* Info Grid */}
         <div className="px-6 pb-6 -mt-2">
           <div className="bg-card border border-border rounded-xl p-4 space-y-3">
             {(person.birthYear || person.deathYear) && (
               <div className="flex items-center gap-3">
                 <Calendar className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-foreground">
-                  {person.birthYear || '？'} — {person.deathYear || '？'}
-                </span>
+                <span className="text-sm text-foreground">{person.birthYear || '？'} — {person.deathYear || '？'}</span>
               </div>
             )}
             {person.spouse && (
               <div className="flex items-center gap-3">
                 <Users className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-foreground">
-                  配偶：{person.spouse}
-                </span>
+                <span className="text-sm text-foreground">配偶：{person.spouse}</span>
               </div>
             )}
             {children.length > 0 && (
               <div className="flex items-center gap-3">
                 <Users className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-foreground">
-                  子嗣：{children.map(c => c.name).join('、')}
-                </span>
+                <span className="text-sm text-foreground">子嗣：{children.map(c => c.name).join('、')}</span>
               </div>
             )}
           </div>

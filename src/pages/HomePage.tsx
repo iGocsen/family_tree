@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
-import { genealogies } from '@/lib/data';
-import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings } from 'lucide-react';
+import { genealogies, getMaxGeneration } from '@/lib/data';
+import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText } from 'lucide-react';
 
 export default function HomePage() {
   return (
@@ -29,70 +29,64 @@ export default function HomePage() {
       {/* Genealogy Cards */}
       <div className="max-w-6xl mx-auto px-6 pb-20">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {genealogies.map((genealogy, index) => (
-            <Link
-              key={genealogy.id}
-              to={`/genealogy/${genealogy.id}`}
-              className="group relative block"
-              style={{ animationDelay: `${index * 0.1}s` }}
-            >
-              <div className="relative bg-card border border-border rounded-xl p-6 transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 hover:border-primary/30 hover:-translate-y-1 overflow-hidden">
-                {/* Decorative corner */}
-                <div className="absolute top-0 right-0 w-20 h-20 opacity-10 group-hover:opacity-20 transition-opacity">
-                  <svg viewBox="0 0 80 80" className="w-full h-full">
-                    <path d="M80 0 L80 80 L0 80" fill="none" stroke="currentColor" strokeWidth="1" className="text-primary" />
-                  </svg>
-                </div>
-
-                <div className="relative">
-                  {/* Generation badge */}
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-4">
-                    <Users className="w-3.5 h-3.5" />
-                    <span>九世传承</span>
-                  </div>
-
-                  <h2 className="text-2xl font-bold text-foreground mb-3 group-hover:text-primary transition-colors">
-                    {genealogy.name}
-                  </h2>
-
-                  <p className="text-muted-foreground text-sm leading-relaxed mb-6 line-clamp-3">
-                    {genealogy.description}
-                  </p>
-
-                  <div className="space-y-2 mb-6">
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <MapPin className="w-4 h-4 text-accent" />
-                      <span>{genealogy.origin}</span>
+          {genealogies.map((genealogy, index) => {
+            const maxGen = getMaxGeneration(genealogy.id);
+            const genLabel = maxGen > 0 ? `${['零','一','二','三','四','五','六','七','八','九','十','十一','十二','十三','十四','十五'][maxGen] || maxGen}世传承` : '传承';
+            return (
+              <div key={genealogy.id} className="group relative" style={{ animationDelay: `${index * 0.1}s` }}>
+                <Link to={`/genealogy/${genealogy.id}`} className="block">
+                  <div className="relative bg-card border border-border rounded-xl p-6 transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 hover:border-primary/30 hover:-translate-y-1 overflow-hidden">
+                    <div className="absolute top-0 right-0 w-20 h-20 opacity-10 group-hover:opacity-20 transition-opacity">
+                      <svg viewBox="0 0 80 80" className="w-full h-full">
+                        <path d="M80 0 L80 80 L0 80" fill="none" stroke="currentColor" strokeWidth="1" className="text-primary" />
+                      </svg>
                     </div>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Calendar className="w-4 h-4 text-accent" />
-                      <span>始迁于 {genealogy.foundingYear} 年</span>
+                    <div className="relative">
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-4">
+                        <Users className="w-3.5 h-3.5" />
+                        <span>{genLabel}</span>
+                      </div>
+                      <h2 className="text-2xl font-bold text-foreground mb-3 group-hover:text-primary transition-colors">
+                        {genealogy.name}
+                      </h2>
+                      <p className="text-muted-foreground text-sm leading-relaxed mb-6 line-clamp-3">
+                        {genealogy.description}
+                      </p>
+                      <div className="space-y-2 mb-6">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <MapPin className="w-4 h-4 text-accent" />
+                          <span>{genealogy.origin}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Calendar className="w-4 h-4 text-accent" />
+                          <span>始迁于 {genealogy.foundingYear} 年</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between pt-4 border-t border-border">
+                        <span className="text-sm text-muted-foreground">始祖：{genealogy.ancestor.name}</span>
+                        <ArrowRight className="w-5 h-5 text-primary transform group-hover:translate-x-1 transition-transform" />
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between pt-4 border-t border-border">
-                    <span className="text-sm text-muted-foreground">
-                      始祖：{genealogy.ancestor.name}
-                    </span>
-                    <ArrowRight className="w-5 h-5 text-primary transform group-hover:translate-x-1 transition-transform" />
-                  </div>
-                </div>
+                </Link>
+                <Link
+                  to={`/introduction/${genealogy.id}`}
+                  className="mt-3 inline-flex items-center gap-1.5 text-sm text-primary/70 hover:text-primary transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  查看介绍
+                </Link>
               </div>
-            </Link>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* Footer */}
       <div className="border-t border-border py-8">
         <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            慎终追远 · 民德归厚
-          </p>
-          <Link
-            to="/admin"
-            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
+          <p className="text-sm text-muted-foreground">慎终追远 · 民德归厚</p>
+          <Link to="/admin" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
             <Settings className="w-4 h-4" />
             管理后台
           </Link>

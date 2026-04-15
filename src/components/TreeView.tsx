@@ -8,7 +8,7 @@ interface TreeViewProps {
   expandedGenerations: Set<number>;
   setExpandedGenerations: React.Dispatch<React.SetStateAction<Set<number>>>;
   onSelectPerson: (person: Person) => void;
-  onBranchClick: (person: Person) => void;
+  onBranchClick?: (person: Person) => void;
   selectedPersonId: string | null;
   visibleRange: { minGen: number; maxGen: number };
 }
@@ -57,7 +57,7 @@ export default function TreeView({
     <div className="flex flex-col items-center">
       {/* Node */}
       <button
-        onClick={() => { onSelectPerson(person); onBranchClick(person); }}
+        onClick={() => { onSelectPerson(person); onBranchClick?.(person); }}
         className={`relative flex flex-col items-center px-4 py-2.5 rounded-xl border-2 transition-all duration-200 min-w-[110px] ${
           isSelected
             ? 'border-primary bg-primary/10 shadow-lg shadow-primary/10 ring-2 ring-primary/20'

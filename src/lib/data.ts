@@ -23,6 +23,15 @@ export interface Genealogy {
   people: Record<string, Person>;
 }
 
+export interface CustomGenealogyData {
+  id: string;
+  name: string;
+  description: string;
+  origin: string;
+  foundingYear: string;
+  people: Record<string, Person>;
+}
+
 const buildPeople = (people: Person[]): Record<string, Person> => {
   const record: Record<string, Person> = {};
   people.forEach(p => { record[p.id] = p; });
@@ -173,7 +182,7 @@ const chenPeople = buildPeople([
   { id: 'chen-9h', name: '陈建金', generation: 9, birthYear: '1948', deathYear: '2028', gender: 'male', biography: '九世，字金融。金融学家，曾任证监会副主席。', achievements: ['证监会副主席'], parentId: 'chen-8g' },
 ]);
 
-// Export base genealogies for HomePage display
+// Base genealogies for HomePage display
 export const genealogies: Genealogy[] = [
   { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', foundingYear: '1680', ancestor: liPeople['li-1'], people: liPeople },
   { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', foundingYear: '1690', ancestor: zhangPeople['zhang-1'], people: zhangPeople },
@@ -185,59 +194,53 @@ let mergedCache: Record<string, { genealogy: Genealogy; timestamp: number }> = {
 
 /**
  * Get genealogy with approved new persons merged in.
- * Reads from localStorage for approved persons and merges them into the base data.
  */
 export function getGenealogy(id: string): Genealogy | undefined {
   const base = genealogies.find(g => g.id === id);
   if (!base) return undefined;
 
-  // Check cache (5 second TTL)
   const cached = mergedCache[id];
-  if (cached && Date.now() - cached.timestamp < 5000) {
-    return cached.genealogy;
-  }
+  if (cached && Date.now() - cached.timestamp < 5000) return cached.genealogy;
 
-  // Read approved persons from localStorage
   let approvedPersons: any[] = [];
   try {
     const data = localStorage.getItem('genealogy_new_persons');
-    if (data) {
-      approvedPersons = JSON.parse(data).filter((p: any) => p.genealogyId === id && p.status === 'approved');
-    }
-  } catch {
-    // ignore
-  }
+    if (data) approvedPersons = JSON.parse(data).filter((p: any) => p.genealogyId === id && p.status === 'approved');
+  } catch { /* ignore */ }
 
   if (approvedPersons.length === 0) {
     mergedCache[id] = { genealogy: base, timestamp: Date.now() };
     return base;
   }
 
-  // Merge approved persons into the people record
   const mergedPeople = { ...base.people };
   for (const ap of approvedPersons) {
     const person: Person = {
-      id: ap.id,
-      name: ap.name,
-      generation: ap.generation,
-      birthYear: ap.birthYear || undefined,
-      deathYear: ap.deathYear || undefined,
-      gender: ap.gender,
-      spouse: ap.spouse || undefined,
-      parentId: ap.parentId || undefined,
+      id: ap.id, name: ap.name, generation: ap.generation,
+      birthYear: ap.birthYear || undefined, deathYear: ap.deathYear || undefined,
+      gender: ap.gender, spouse: ap.spouse || undefined, parentId: ap.parentId || undefined,
       biography: ap.biography,
       achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
     };
     mergedPeople[ap.id] = person;
   }
 
-  const merged: Genealogy = {
-    ...base,
-    people: mergedPeople,
-  };
-
+  const merged: Genealogy = { ...base, people: mergedPeople };
   mergedCache[id] = { genealogy: merged, timestamp: Date.now() };
   return merged;
+}
+
+/**
+ * Get max generation for a genealogy (including approved new persons)
+ */
+export function getMaxGeneration(genealogyId: string): number {
+  const genealogy = getGenealogy(genealogyId);
+  if (!genealogy) return 0;
+  let maxGen = 0;
+  for (const p of Object.values(genealogy.people)) {
+    if (p.generation > maxGen) maxGen = p.generation;
+  }
+  return maxGen;
 }
 
 export function searchPerson(genealogyId: string, query: string): Person[] {
@@ -265,10 +268,6 @@ export function getChildren(genealogyId: string, parentId: string): Person[] {
   return Object.values(genealogy.people).filter(p => p.parentId === parentId);
 }
 
-/**
- * Get ancestor chain from a person up to the root
- * Returns [root, ..., grandparent, parent, person]
- */
 export function getAncestorChain(genealogyId: string, personId: string): Person[] {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return [];
@@ -282,9 +281,6 @@ export function getAncestorChain(genealogyId: string, personId: string): Person[
   return chain;
 }
 
-/**
- * Get all descendants of a person (recursive)
- */
 export function getDescendants(genealogyId: string, personId: string, maxDepth?: number, currentDepth: number = 0): Person[] {
   const children = getChildren(genealogyId, personId);
   if (maxDepth !== undefined && currentDepth >= maxDepth) return [];
@@ -296,37 +292,25 @@ export function getDescendants(genealogyId: string, personId: string, maxDepth?:
   return result;
 }
 
-/**
- * Get persons by generation
- */
 export function getPersonsByGeneration(genealogyId: string, generation: number): Person[] {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return [];
   return Object.values(genealogy.people).filter(p => p.generation === generation);
 }
 
-/**
- * Build tree roots for rendering.
- * Given a selected person, find the ancestor at minGen, then return that ancestor
- * and all their siblings (same parent) at minGen.
- */
 export function getTreeRoots(genealogyId: string, selectedPerson: Person, minGen: number, maxGen: number): Person[] {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return [];
 
   const chain = getAncestorChain(genealogyId, selectedPerson.id);
   const ancestorAtMinGen = chain.find(p => p.generation === minGen);
-
   if (!ancestorAtMinGen) return [];
 
-  if (minGen === 1) {
-    return getPersonsByGeneration(genealogyId, 1);
-  }
+  if (minGen === 1) return getPersonsByGeneration(genealogyId, 1);
 
   const ancestorParentId = ancestorAtMinGen.parentId;
   if (ancestorParentId) {
     return getPersonsByGeneration(genealogyId, minGen).filter(p => p.parentId === ancestorParentId);
   }
-
   return [ancestorAtMinGen];
 }
