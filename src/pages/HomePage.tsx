@@ -1,8 +1,44 @@
+import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { genealogies, getMaxGeneration } from '@/lib/data';
-import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText } from 'lucide-react';
+import { getCustomGenealogies } from '@/lib/store';
+import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText, Search } from 'lucide-react';
 
 export default function HomePage() {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
+  const customGenealogies = getCustomGenealogies();
+
+  // Combine base + custom genealogies
+  const allGenealogies = useMemo(() => {
+    const base = genealogies.map(g => ({ ...g, isCustom: false }));
+    const custom = customGenealogies.map(cg => ({
+      id: cg.id, name: cg.name, description: cg.description, origin: cg.origin,
+      foundingYear: cg.foundingYear, isCustom: true,
+      ancestor: Object.values(cg.people).find(p => p.generation === 1),
+      people: cg.people,
+    }));
+    return [...base, ...custom];
+  }, [customGenealogies]);
+
+  // Filter by search
+  const filteredGenealogies = useMemo(() => {
+    if (!searchQuery.trim()) return allGenealogies;
+    const q = searchQuery.trim().toLowerCase();
+    return allGenealogies.filter(g =>
+      g.name.toLowerCase().includes(q) ||
+      g.description.toLowerCase().includes(q) ||
+      g.origin.toLowerCase().includes(q)
+    );
+  }, [allGenealogies, searchQuery]);
+
+  // Responsive grid
+  const gridClass = allGenealogies.length <= 1
+    ? 'grid-cols-1 max-w-md mx-auto'
+    : allGenealogies.length === 2 || allGenealogies.length === 4 || allGenealogies.length === 7
+      ? 'grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto'
+      : 'grid-cols-1 md:grid-cols-3';
+
   return (
     <div className="min-h-screen bg-background">
       {/* Hero Section */}
@@ -12,10 +48,30 @@ export default function HomePage() {
           backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23000000' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
         }} />
         <div className="relative max-w-6xl mx-auto px-6 pt-20 pb-16 text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 text-primary text-sm mb-6 animate-fade-in">
+          <button
+            onClick={() => setIsSearching(!isSearching)}
+            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 text-primary text-sm mb-6 animate-fade-in hover:bg-primary/20 transition-colors cursor-pointer"
+          >
             <BookOpen className="w-4 h-4" />
             <span>传承有序 · 源远流长</span>
-          </div>
+          </button>
+
+          {isSearching && (
+            <div className="max-w-md mx-auto mb-6 animate-slide-up">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索族谱名称..."
+                  className="w-full pl-10 pr-4 py-2.5 bg-card border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+
           <h1 className="text-5xl md:text-6xl font-bold text-foreground tracking-tight mb-4 animate-slide-up">
             族谱查询系统
           </h1>
@@ -28,8 +84,13 @@ export default function HomePage() {
 
       {/* Genealogy Cards */}
       <div className="max-w-6xl mx-auto px-6 pb-20">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {genealogies.map((genealogy, index) => {
+        {isSearching && searchQuery && (
+          <p className="text-sm text-muted-foreground mb-4">
+            找到 {filteredGenealogies.length} 个匹配的族谱
+          </p>
+        )}
+        <div className={`grid ${gridClass} gap-8`}>
+          {filteredGenealogies.map((genealogy, index) => {
             const maxGen = getMaxGeneration(genealogy.id);
             const genLabel = maxGen > 0 ? `${['零','一','二','三','四','五','六','七','八','九','十','十一','十二','十三','十四','十五'][maxGen] || maxGen}世传承` : '传承';
             return (
@@ -42,9 +103,14 @@ export default function HomePage() {
                       </svg>
                     </div>
                     <div className="relative">
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-4">
-                        <Users className="w-3.5 h-3.5" />
-                        <span>{genLabel}</span>
+                      <div className="flex items-center gap-2 mb-4">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium">
+                          <Users className="w-3.5 h-3.5" />
+                          <span>{genLabel}</span>
+                        </div>
+                        {genealogy.isCustom && (
+                          <span className="text-xs px-2 py-0.5 bg-accent/10 text-accent rounded-full">自定义</span>
+                        )}
                       </div>
                       <h2 className="text-2xl font-bold text-foreground mb-3 group-hover:text-primary transition-colors">
                         {genealogy.name}
@@ -53,17 +119,23 @@ export default function HomePage() {
                         {genealogy.description}
                       </p>
                       <div className="space-y-2 mb-6">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <MapPin className="w-4 h-4 text-accent" />
-                          <span>{genealogy.origin}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Calendar className="w-4 h-4 text-accent" />
-                          <span>始迁于 {genealogy.foundingYear} 年</span>
-                        </div>
+                        {genealogy.origin && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <MapPin className="w-4 h-4 text-accent" />
+                            <span>{genealogy.origin}</span>
+                          </div>
+                        )}
+                        {genealogy.foundingYear && (
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Calendar className="w-4 h-4 text-accent" />
+                            <span>始迁于 {genealogy.foundingYear} 年</span>
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center justify-between pt-4 border-t border-border">
-                        <span className="text-sm text-muted-foreground">始祖：{genealogy.ancestor.name}</span>
+                        <span className="text-sm text-muted-foreground">
+                          始祖：{genealogy.ancestor?.name || '—'}
+                        </span>
                         <ArrowRight className="w-5 h-5 text-primary transform group-hover:translate-x-1 transition-transform" />
                       </div>
                     </div>
@@ -80,6 +152,11 @@ export default function HomePage() {
             );
           })}
         </div>
+        {filteredGenealogies.length === 0 && isSearching && searchQuery && (
+          <div className="text-center py-12 text-muted-foreground">
+            <p>未找到匹配的族谱</p>
+          </div>
+        )}
       </div>
 
       {/* Footer */}

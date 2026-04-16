@@ -23,15 +23,6 @@ export interface Genealogy {
   people: Record<string, Person>;
 }
 
-export interface CustomGenealogyData {
-  id: string;
-  name: string;
-  description: string;
-  origin: string;
-  foundingYear: string;
-  people: Record<string, Person>;
-}
-
 const buildPeople = (people: Person[]): Record<string, Person> => {
   const record: Record<string, Person> = {};
   people.forEach(p => { record[p.id] = p; });

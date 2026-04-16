@@ -50,6 +50,20 @@ export interface CustomGenealogy {
   origin: string;
   foundingYear: string;
   people: Record<string, Person>;
+  introductions?: string[]; // Extended introduction pages
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  password: string;
+  displayName: string;
+  bio?: string;
+  contact?: string;
+  role: 'super' | 'admin';
+  status: 'active' | 'disabled';
+  editableGenealogies: string[]; // empty = all
+  createdAt: string;
 }
 
 const FEEDBACKS_KEY = 'genealogy_feedbacks';
@@ -57,11 +71,21 @@ const EDITS_KEY = 'genealogy_edits';
 const NEW_PERSONS_KEY = 'genealogy_new_persons';
 const CUSTOM_GENEALOGIES_KEY = 'genealogy_custom';
 const AUTH_KEY = 'genealogy_admin_auth';
+const ADMINS_KEY = 'genealogy_admins';
 
 // ===== Auth =====
 export function login(username: string, password: string): boolean {
+  // Check custom admins first
+  const admins = getAdmins();
+  const admin = admins.find(a => a.username === username && a.password === password);
+  if (admin && admin.status === 'active') {
+    const auth = { loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: admin.id };
+    localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
+    return true;
+  }
+  // Fallback to default admin
   if (username === 'admin' && password === 'password') {
-    const auth = { loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+    const auth = { loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: 'default' };
     localStorage.setItem(AUTH_KEY, JSON.stringify(auth));
     return true;
   }
@@ -79,6 +103,57 @@ export function isAuthenticated(): boolean {
     if (Date.now() > auth.expiresAt) { localStorage.removeItem(AUTH_KEY); return false; }
     return true;
   } catch { return false; }
+}
+
+export function getCurrentUserId(): string | null {
+  try {
+    const data = localStorage.getItem(AUTH_KEY);
+    if (!data) return null;
+    return JSON.parse(data).userId || null;
+  } catch { return null; }
+}
+
+// ===== Admin Management =====
+function getDefaultAdmins(): AdminUser[] {
+  return [{
+    id: 'default', username: 'admin', password: 'password', displayName: '超级管理员',
+    role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString(),
+  }];
+}
+
+export function getAdmins(): AdminUser[] {
+  try {
+    const data = localStorage.getItem(ADMINS_KEY);
+    const custom: AdminUser[] = data ? JSON.parse(data) : [];
+    return [...getDefaultAdmins(), ...custom];
+  } catch { return getDefaultAdmins(); }
+}
+
+export function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): AdminUser {
+  const admins = getAdmins().filter(a => a.id !== 'default');
+  const newAdmin: AdminUser = {
+    ...admin,
+    id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: admin.createdAt || new Date().toISOString(),
+  };
+  const idx = admins.findIndex(a => a.id === newAdmin.id);
+  if (idx >= 0) { admins[idx] = newAdmin; } else { admins.push(newAdmin); }
+  localStorage.setItem(ADMINS_KEY, JSON.stringify(admins));
+  return newAdmin;
+}
+
+export function deleteAdmin(id: string): void {
+  if (id === 'default') return;
+  const admins = getAdmins().filter(a => a.id !== id);
+  const custom = admins.filter(a => a.id !== 'default');
+  localStorage.setItem(ADMINS_KEY, JSON.stringify(custom));
+}
+
+export function updateAdminStatus(id: string, status: 'active' | 'disabled'): void {
+  if (id === 'default') return;
+  const admins = getAdmins().filter(a => a.id !== 'default');
+  const idx = admins.findIndex(a => a.id === id);
+  if (idx >= 0) { admins[idx].status = status; localStorage.setItem(ADMINS_KEY, JSON.stringify(admins)); }
 }
 
 // ===== Custom Genealogies =====
@@ -105,6 +180,28 @@ export function updateCustomGenealogy(id: string, updates: Partial<CustomGenealo
   const list = getCustomGenealogies();
   const idx = list.findIndex(g => g.id === id);
   if (idx >= 0) { list[idx] = { ...list[idx], ...updates }; localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list)); }
+}
+
+export function updateGenealogyIntroductions(id: string, introductions: string[]): void {
+  const list = getCustomGenealogies();
+  const idx = list.findIndex(g => g.id === id);
+  if (idx >= 0) { list[idx].introductions = introductions; localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list)); }
+  // Also update base genealogies via a separate key
+  const intros = getIntroductions();
+  intros[id] = introductions;
+  localStorage.setItem('genealogy_introductions', JSON.stringify(intros));
+}
+
+export function getIntroductions(): Record<string, string[]> {
+  try {
+    const data = localStorage.getItem('genealogy_introductions');
+    return data ? JSON.parse(data) : {};
+  } catch { return {}; }
+}
+
+export function getGenealogyIntroductions(id: string): string[] {
+  const intros = getIntroductions();
+  return intros[id] || [];
 }
 
 // ===== Feedback Store =====

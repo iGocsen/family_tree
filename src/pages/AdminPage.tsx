@@ -5,9 +5,10 @@ import {
   getPersonEdits, updateEditStatus, deleteEdit, modifyEdit,
   getNewPersons, updateNewPersonStatus, deleteNewPerson,
   saveNewPerson, savePersonEdit, modifyNewPerson,
-  getStats, login, logout, isAuthenticated,
+  getStats, login, logout, isAuthenticated, getCurrentUserId,
   getCustomGenealogies, saveCustomGenealogy, deleteCustomGenealogy, updateCustomGenealogy,
-  getApprovedPersonsByGenealogy,
+  getApprovedPersonsByGenealogy, getGenealogyIntroductions, updateGenealogyIntroductions,
+  getAdmins, saveAdmin, deleteAdmin, updateAdminStatus,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
 import { genealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
@@ -15,9 +16,10 @@ import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
   ArrowUp, ArrowDown, LogIn, LogOut, Lock, User, Pencil, Plus,
+  FileText, KeyRound, UserCog, Shield, ShieldOff,
 } from 'lucide-react';
 
-type TabType = 'dashboard' | 'feedbacks' | 'edits' | 'new-persons' | 'genealogies';
+type TabType = 'dashboard' | 'feedbacks' | 'edits' | 'new-persons' | 'genealogies' | 'admins';
 
 // ===== Login Page =====
 function LoginPage() {
@@ -25,17 +27,13 @@ function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-
   const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoggingIn(true);
+    e.preventDefault(); setError(''); setIsLoggingIn(true);
     await new Promise(r => setTimeout(r, 500));
     if (login(username, password)) { window.location.reload(); }
     else { setError('账号或密码错误'); }
     setIsLoggingIn(false);
   };
-
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-md">
@@ -100,15 +98,23 @@ function AdminPageInner() {
   const [genealogyForm, setGenealogyForm] = useState({ id: '', name: '', description: '', origin: '', foundingYear: '' });
   const [editingGenealogyId, setEditingGenealogyId] = useState<string | null>(null);
 
+  // Introduction editor
+  const [showIntroEditor, setShowIntroEditor] = useState(false);
+  const [introEditorId, setIntroEditorId] = useState('');
+  const [introPages, setIntroPages] = useState<string[]>([]);
+
+  // Admin management
+  const [admins, setAdmins] = useState(getAdmins());
+  const [showAdminForm, setShowAdminForm] = useState(false);
+  const [adminForm, setAdminForm] = useState({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin' as 'super' | 'admin', status: 'active' as 'active' | 'disabled', editableGenealogies: [] as string[] });
+  const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   const refreshData = () => {
-    setFeedbacks(getFeedbacks());
-    setEdits(getPersonEdits());
-    setNewPersons(getNewPersons());
-    setStats(getStats());
-    setCustomGenealogies(getCustomGenealogies());
+    setFeedbacks(getFeedbacks()); setEdits(getPersonEdits()); setNewPersons(getNewPersons());
+    setStats(getStats()); setCustomGenealogies(getCustomGenealogies()); setAdmins(getAdmins());
   };
 
   const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
@@ -122,15 +128,8 @@ function AdminPageInner() {
   const handleDeleteNewPerson = (id: string) => { deleteNewPerson(id); refreshData(); };
 
   const handleModifyNewPerson = (person: any) => {
-    setNewPersonForm({
-      genealogyId: person.genealogyId, name: person.name, generation: person.generation,
-      birthYear: person.birthYear, deathYear: person.deathYear, gender: person.gender,
-      spouse: person.spouse, parentId: person.parentId, biography: person.biography,
-      achievements: person.achievements,
-    });
-    setEditingPersonId(person.id);
-    setShowNewPersonForm(true);
-    setFormErrors({});
+    setNewPersonForm({ genealogyId: person.genealogyId, name: person.name, generation: person.generation, birthYear: person.birthYear, deathYear: person.deathYear, gender: person.gender, spouse: person.spouse, parentId: person.parentId, biography: person.biography, achievements: person.achievements });
+    setEditingPersonId(person.id); setShowNewPersonForm(true); setFormErrors({});
   };
 
   const handleSubmitNewPerson = (e: React.FormEvent) => {
@@ -138,57 +137,27 @@ function AdminPageInner() {
     const errors: Record<string, string> = {};
     if (!newPersonForm.genealogyId) errors.genealogyId = '请选择族谱';
     if (!newPersonForm.name) errors.name = '请输入姓名';
-
     if (newPersonForm.parentId) {
       const genealogy = getGenealogy(newPersonForm.genealogyId);
       const parent = genealogy?.people[newPersonForm.parentId];
       if (parent) {
-        if (newPersonForm.generation !== parent.generation + 1) {
-          errors.generation = `父亲为第${parent.generation}世，新增人物必须为第${parent.generation + 1}世`;
-        }
-        if (newPersonForm.birthYear && parent.birthYear) {
-          if (parseInt(newPersonForm.birthYear) < parseInt(parent.birthYear)) {
-            errors.birthYear = `出生年份不能早于父亲的出生年份（${parent.birthYear}年）`;
-          }
-        }
+        if (newPersonForm.generation !== parent.generation + 1) errors.generation = `父亲为第${parent.generation}世，新增人物必须为第${parent.generation + 1}世`;
+        if (newPersonForm.birthYear && parent.birthYear && parseInt(newPersonForm.birthYear) < parseInt(parent.birthYear)) errors.birthYear = `出生年份不能早于父亲的出生年份（${parent.birthYear}年）`;
       }
     }
-
-    // Year validations
     const currentYear = new Date().getFullYear();
-    if (newPersonForm.birthYear && parseInt(newPersonForm.birthYear) > currentYear) {
-      errors.birthYear = '出生年份不能晚于当前年份';
-    }
-    if (newPersonForm.deathYear && parseInt(newPersonForm.deathYear) > currentYear) {
-      errors.deathYear = '逝世年份不能晚于当前年份';
-    }
+    if (newPersonForm.birthYear && parseInt(newPersonForm.birthYear) > currentYear) errors.birthYear = '出生年份不能晚于当前年份';
+    if (newPersonForm.deathYear && parseInt(newPersonForm.deathYear) > currentYear) errors.deathYear = '逝世年份不能晚于当前年份';
     if (newPersonForm.birthYear && newPersonForm.deathYear) {
       const age = parseInt(newPersonForm.deathYear) - parseInt(newPersonForm.birthYear);
       if (age > 200) errors.deathYear = '寿命不能超过200年';
       if (age < 0) errors.deathYear = '逝世年份不能早于出生年份';
     }
-    if (newPersonForm.parentId && newPersonForm.birthYear) {
-      const genealogy = getGenealogy(newPersonForm.genealogyId);
-      const parent = genealogy?.people[newPersonForm.parentId];
-      if (parent && parent.deathYear) {
-        if (parseInt(newPersonForm.birthYear) > parseInt(parent.deathYear) + 1) {
-          errors.birthYear = `出生年份不能超过父亲逝世年份+1（${parseInt(parent.deathYear) + 1}年）`;
-        }
-      }
-    }
-
     if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
-
-    if (editingPersonId) {
-      modifyNewPerson(editingPersonId, { ...newPersonForm });
-      setEditingPersonId(null);
-    } else {
-      saveNewPerson({ ...newPersonForm });
-    }
-
+    if (editingPersonId) { modifyNewPerson(editingPersonId, { ...newPersonForm }); setEditingPersonId(null); }
+    else { saveNewPerson({ ...newPersonForm }); }
     setNewPersonForm({ genealogyId: '', name: '', generation: 1, birthYear: '', deathYear: '', gender: 'male', spouse: '', parentId: '', biography: '', achievements: '' });
-    setShowNewPersonForm(false); setEditingPersonId(null); setFormErrors({});
-    refreshData();
+    setShowNewPersonForm(false); setEditingPersonId(null); setFormErrors({}); refreshData();
   };
 
   const handleSubmitEdit = (e: React.FormEvent) => {
@@ -196,19 +165,14 @@ function AdminPageInner() {
     if (!editForm.genealogyId || !editForm.personId || !editForm.newValue) return;
     const genealogy = getGenealogy(editForm.genealogyId);
     const person = genealogy?.people[editForm.personId];
-    savePersonEdit({
-      genealogyId: editForm.genealogyId, genealogyName: genealogy?.name || '',
-      personId: editForm.personId, personName: person?.name || '',
-      field: editForm.field, oldValue: editForm.oldValue, newValue: editForm.newValue,
-    });
+    savePersonEdit({ genealogyId: editForm.genealogyId, genealogyName: genealogy?.name || '', personId: editForm.personId, personName: person?.name || '', field: editForm.field, oldValue: editForm.oldValue, newValue: editForm.newValue });
     setEditForm({ genealogyId: '', personId: '', field: 'biography', oldValue: '', newValue: '' });
     setShowEditForm(false); setEditingEditId(null); refreshData();
   };
 
   const handleModifyEdit = (edit: PersonEdit) => {
     setEditForm({ genealogyId: edit.genealogyId, personId: edit.personId, field: edit.field, oldValue: edit.oldValue, newValue: edit.newValue });
-    setEditingEditId(edit.id);
-    setShowEditForm(true);
+    setEditingEditId(edit.id); setShowEditForm(true);
   };
 
   const handleSaveEditModification = (e: React.FormEvent) => {
@@ -267,21 +231,18 @@ function AdminPageInner() {
     { key: 'edits', label: '修改审核', icon: <Edit3 className="w-4 h-4" />, count: stats.edits.pending },
     { key: 'new-persons', label: '新增人物', icon: <UserPlus className="w-4 h-4" />, count: stats.newPersons.pending },
     { key: 'genealogies', label: '族谱管理', icon: <Plus className="w-4 h-4" /> },
+    { key: 'admins', label: '管理员', icon: <UserCog className="w-4 h-4" /> },
   ];
 
   const selectedGenealogy = allGenealogies.find(g => g.id === newPersonForm.genealogyId);
   const selectedGenealogyForEdit = allGenealogies.find(g => g.id === editForm.genealogyId);
   const availablePersons = selectedGenealogyForEdit ? Object.values(selectedGenealogyForEdit.people) : [];
 
-  // Available parents: only show gen-1 if no gen selected, otherwise show gen-1 only
   const availableParents = useMemo(() => {
-    if (!selectedGenealogy) return [];
-    if (newPersonForm.generation <= 1) return [];
-    // Only show generation = newPersonForm.generation - 1
+    if (!selectedGenealogy || newPersonForm.generation <= 1) return [];
     return Object.values(selectedGenealogy.people).filter(p => p.generation === newPersonForm.generation - 1);
   }, [selectedGenealogy, newPersonForm.generation]);
 
-  // Include approved new persons as potential parents
   const approvedParents = useMemo(() => {
     if (!newPersonForm.genealogyId || newPersonForm.generation <= 1) return [];
     return getApprovedPersonsByGenealogy(newPersonForm.genealogyId).filter(p => p.generation === newPersonForm.generation - 1);
@@ -297,25 +258,63 @@ function AdminPageInner() {
   const handleSaveGenealogy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!genealogyForm.id || !genealogyForm.name) return;
+    const existing = allGenealogies.find(g => g.id === genealogyForm.id && !g.isCustom);
     if (editingGenealogyId) {
       updateCustomGenealogy(editingGenealogyId, genealogyForm);
       setEditingGenealogyId(null);
+    } else if (existing) {
+      // Update base genealogy via custom overlay
+      saveCustomGenealogy({ ...genealogyForm, people: existing.people, introductions: [] });
     } else {
-      saveCustomGenealogy({ ...genealogyForm, people: {} });
+      saveCustomGenealogy({ ...genealogyForm, people: {}, introductions: [] });
     }
     setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' });
-    setShowGenealogyForm(false); setEditingGenealogyId(null);
-    refreshData();
+    setShowGenealogyForm(false); setEditingGenealogyId(null); refreshData();
   };
 
-  const handleEditGenealogy = (cg: any) => {
-    setGenealogyForm({ id: cg.id, name: cg.name, description: cg.description, origin: cg.origin, foundingYear: cg.foundingYear });
-    setEditingGenealogyId(cg.id);
-    setShowGenealogyForm(true);
+  const handleEditGenealogy = (g: any) => {
+    setGenealogyForm({ id: g.id, name: g.name, description: g.description, origin: g.origin, foundingYear: g.foundingYear });
+    setEditingGenealogyId(g.id); setShowGenealogyForm(true);
   };
 
   const handleDeleteGenealogy = (id: string) => {
     deleteCustomGenealogy(id);
+    refreshData();
+  };
+
+  const handleOpenIntroEditor = (genealogyId: string) => {
+    setIntroEditorId(genealogyId);
+    setIntroPages(getGenealogyIntroductions(genealogyId));
+    setShowIntroEditor(true);
+  };
+
+  const handleSaveIntros = () => {
+    updateGenealogyIntroductions(introEditorId, introPages);
+    setShowIntroEditor(false);
+  };
+
+  const handleSaveAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminForm.username || !adminForm.displayName) return;
+    saveAdmin({ ...adminForm, id: adminForm.id || undefined });
+    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin', status: 'active', editableGenealogies: [] });
+    setShowAdminForm(false); setEditingAdminId(null); refreshData();
+  };
+
+  const handleEditAdmin = (a: any) => {
+    setAdminForm({ id: a.id, username: a.username, password: '', displayName: a.displayName, bio: a.bio || '', contact: a.contact || '', role: a.role, status: a.status, editableGenealogies: a.editableGenealogies || [] });
+    setEditingAdminId(a.id); setShowAdminForm(true);
+  };
+
+  const handleDeleteAdmin = (id: string) => {
+    if (id === 'default') return;
+    deleteAdmin(id); refreshData();
+  };
+
+  const handleToggleAdminStatus = (id: string) => {
+    const admin = admins.find(a => a.id === id);
+    if (!admin || id === 'default') return;
+    updateAdminStatus(id, admin.status === 'active' ? 'disabled' : 'active');
     refreshData();
   };
 
@@ -390,14 +389,8 @@ function AdminPageInner() {
         {activeTab === 'feedbacks' && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索反馈..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" />
-              </div>
-              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all">
-                  <option value="all">全部状态</option><option value="pending">待处理</option><option value="resolved">已解决</option><option value="rejected">已驳回</option>
-                </select>
-              </div>
+              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索反馈..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" /></div>
+              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"><option value="all">全部状态</option><option value="pending">待处理</option><option value="resolved">已解决</option><option value="rejected">已驳回</option></select></div>
             </div>
             {filteredFeedbacks.length === 0 ? (<div className="bg-card border border-border rounded-xl p-12 text-center"><MessageSquare className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" /><p className="text-muted-foreground">暂无反馈记录</p></div>) : (
               <div className="space-y-3">
@@ -436,14 +429,8 @@ function AdminPageInner() {
         {activeTab === 'edits' && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索修改记录..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" />
-              </div>
-              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all">
-                  <option value="all">全部状态</option><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option>
-                </select>
-              </div>
+              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索修改记录..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" /></div>
+              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"><option value="all">全部状态</option><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option></select></div>
               <button onClick={() => { setShowEditForm(true); setEditingEditId(null); setEditForm({ genealogyId: '', personId: '', field: 'biography', oldValue: '', newValue: '' }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><Edit3 className="w-4 h-4" />新增修改</button>
             </div>
 
@@ -515,14 +502,8 @@ function AdminPageInner() {
         {activeTab === 'new-persons' && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center gap-4 flex-wrap">
-              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索人物..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" />
-              </div>
-              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all">
-                  <option value="all">全部状态</option><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option>
-                </select>
-              </div>
+              <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索人物..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" /></div>
+              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" /><select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all"><option value="all">全部状态</option><option value="pending">待审核</option><option value="approved">已通过</option><option value="rejected">已驳回</option></select></div>
               <button onClick={() => { setShowNewPersonForm(true); setEditingPersonId(null); setFormErrors({}); setNewPersonForm({ genealogyId: '', name: '', generation: 1, birthYear: '', deathYear: '', gender: 'male', spouse: '', parentId: '', biography: '', achievements: '' }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增人物</button>
             </div>
 
@@ -547,7 +528,7 @@ function AdminPageInner() {
                       <div><label className="block text-sm font-medium text-foreground mb-1">父亲（选填）</label><select value={newPersonForm.parentId} onChange={(e) => setNewPersonForm(prev => ({ ...prev, parentId: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
                         <option value="">无（新增分支始祖）</option>
                         {availableParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''}</option>))}
-                        {approvedParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''} [新增]</option>))}
+                        {approvedParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''} [手工]</option>))}
                       </select>{newPersonForm.parentId && (<p className="text-xs text-muted-foreground mt-1">提示：世系将自动设为父亲世系 + 1（第{(() => { const baseP = selectedGenealogy?.people[newPersonForm.parentId]; const appP = approvedParents.find(x => x.id === newPersonForm.parentId); const p = baseP || appP; return p?.generation ? p.generation + 1 : '?'; })()}世）</p>)}</div>
                       <div><label className="block text-sm font-medium text-foreground mb-1">配偶</label><input type="text" value={newPersonForm.spouse} onChange={(e) => setNewPersonForm(prev => ({ ...prev, spouse: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
                       <div><label className="block text-sm font-medium text-foreground mb-1">生平介绍</label><textarea value={newPersonForm.biography} onChange={(e) => setNewPersonForm(prev => ({ ...prev, biography: e.target.value }))} rows={3} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
@@ -621,25 +602,109 @@ function AdminPageInner() {
             )}
 
             <div className="space-y-3">
-              {allGenealogies.map(g => (
-                <div key={g.id} className="bg-card border border-border rounded-xl p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h4 className="text-lg font-semibold text-foreground">{g.name}</h4>
-                        {g.isCustom && <span className="text-xs px-2 py-0.5 bg-accent/10 text-accent rounded-full">自定义</span>}
+              {allGenealogies.map(g => {
+                const personCount = Object.keys(g.people).length;
+                const hasCustom = !!customGenealogies.find(cg => cg.id === g.id);
+                return (
+                  <div key={g.id} className="bg-card border border-border rounded-xl p-5">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <h4 className="text-lg font-semibold text-foreground">{g.name}</h4>
+                          {hasCustom && <span className="text-xs px-2 py-0.5 bg-accent/10 text-accent rounded-full">已编辑</span>}
+                        </div>
+                        <p className="text-sm text-muted-foreground mb-2">{g.description}</p>
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          {g.origin && <span>迁徙：{g.origin}</span>}
+                          {g.foundingYear && <span>始迁：{g.foundingYear}年</span>}
+                          <span>人数：{personCount}</span>
+                        </div>
                       </div>
-                      <p className="text-sm text-muted-foreground mb-2">{g.description}</p>
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        {g.origin && <span>迁徙：{g.origin}</span>}
-                        {g.foundingYear && <span>始迁：{g.foundingYear}年</span>}
-                        <span>人数：{Object.keys(g.people).length}</span>
-                      </div>
-                    </div>
-                    {g.isCustom && (
                       <div className="flex flex-col gap-2">
                         <button onClick={() => handleEditGenealogy(g)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
-                        <button onClick={() => handleDeleteGenealogy(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        <button onClick={() => handleOpenIntroEditor(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs hover:bg-primary/20 transition-colors"><FileText className="w-3.5 h-3.5" />{getGenealogyIntroductions(g.id).length > 0 ? '修改更多介绍' : '创建更多介绍'}</button>
+                        {hasCustom && (<button onClick={() => handleDeleteGenealogy(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ===== Admin Management ===== */}
+        {activeTab === 'admins' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-foreground">管理员管理</h3>
+              <button onClick={() => { setShowAdminForm(true); setEditingAdminId(null); setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin', status: 'active', editableGenealogies: [] }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
+            </div>
+
+            {showAdminForm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                <div className="bg-card border border-border rounded-2xl max-w-md w-full animate-scale-in overflow-hidden max-h-[90vh] overflow-y-auto">
+                  <div className="px-6 py-4 border-b border-border flex items-center justify-between"><h3 className="text-lg font-semibold text-foreground">{editingAdminId ? '修改管理员' : '新增管理员'}</h3><button onClick={() => { setShowAdminForm(false); setEditingAdminId(null); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-secondary transition-colors"><XCircle className="w-4 h-4 text-muted-foreground" /></button></div>
+                  <form onSubmit={handleSaveAdmin} className="p-6 space-y-4">
+                    <div><label className="block text-sm font-medium text-foreground mb-1">用户名 <span className="text-destructive">*</span></label><input type="text" value={adminForm.username} onChange={(e) => setAdminForm(prev => ({ ...prev, username: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required disabled={!!editingAdminId} /></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">密码 {!editingAdminId && <span className="text-destructive">*</span>}</label><input type="password" value={adminForm.password} onChange={(e) => setAdminForm(prev => ({ ...prev, password: e.target.value }))} placeholder={editingAdminId ? '留空则不修改密码' : '请输入密码'} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required={!editingAdminId} /></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">显示名称 <span className="text-destructive">*</span></label><input type="text" value={adminForm.displayName} onChange={(e) => setAdminForm(prev => ({ ...prev, displayName: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required /></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">备注/介绍</label><textarea value={adminForm.bio} onChange={(e) => setAdminForm(prev => ({ ...prev, bio: e.target.value }))} rows={2} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">联系方式</label><input type="text" value={adminForm.contact} onChange={(e) => setAdminForm(prev => ({ ...prev, contact: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'admin' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="admin">普通管理员</option><option value="super">超级管理员</option></select></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">状态</label><select value={adminForm.status} onChange={(e) => setAdminForm(prev => ({ ...prev, status: e.target.value as 'active' | 'disabled' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="active">启用</option><option value="disabled">停用</option></select></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">可编辑族谱（留空=全部）</label>
+                      <div className="space-y-2 max-h-40 overflow-y-auto">
+                        {allGenealogies.map(g => (
+                          <label key={g.id} className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={adminForm.editableGenealogies.length === 0 || adminForm.editableGenealogies.includes(g.id)} onChange={(e) => {
+                              if (adminForm.editableGenealogies.length === 0) {
+                                // Currently all, now uncheck this one
+                                setAdminForm(prev => ({ ...prev, editableGenealogies: allGenealogies.map(x => x.id).filter(id => id !== g.id) }));
+                              } else if (e.target.checked) {
+                                setAdminForm(prev => ({ ...prev, editableGenealogies: [...prev.editableGenealogies, g.id] }));
+                              } else {
+                                setAdminForm(prev => ({ ...prev, editableGenealogies: prev.editableGenealogies.filter(id => id !== g.id) }));
+                              }
+                            }} className="rounded border-border" />
+                            {g.name}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex gap-3 pt-2"><button type="button" onClick={() => { setShowAdminForm(false); setEditingAdminId(null); }} className="flex-1 px-4 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">取消</button><button type="submit" className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"><Save className="w-4 h-4" />保存</button></div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              {admins.map(admin => (
+                <div key={admin.id} className="bg-card border border-border rounded-xl p-5">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">{admin.displayName.charAt(0)}</div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-semibold text-foreground">{admin.displayName}</h4>
+                          {admin.role === 'super' && <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded">超级管理员</span>}
+                          {admin.status === 'disabled' && <span className="text-xs px-1.5 py-0.5 bg-destructive/10 text-destructive rounded">已停用</span>}
+                        </div>
+                        <p className="text-xs text-muted-foreground">@{admin.username}</p>
+                        {admin.bio && <p className="text-xs text-muted-foreground mt-1">{admin.bio}</p>}
+                        {admin.contact && <p className="text-xs text-muted-foreground">联系方式：{admin.contact}</p>}
+                        {admin.editableGenealogies && admin.editableGenealogies.length > 0 && (
+                          <p className="text-xs text-muted-foreground mt-1">可编辑：{admin.editableGenealogies.map(id => allGenealogies.find(g => g.id === id)?.name).filter(Boolean).join('、')}</p>
+                        )}
+                      </div>
+                    </div>
+                    {admin.id !== 'default' && (
+                      <div className="flex flex-col gap-2">
+                        <button onClick={() => handleEditAdmin(admin)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
+                        <button onClick={() => handleToggleAdminStatus(admin.id)} className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors ${admin.status === 'active' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
+                          {admin.status === 'active' ? <><ShieldOff className="w-3.5 h-3.5" />停用</> : <><Shield className="w-3.5 h-3.5" />启用</>}
+                        </button>
+                        <button onClick={() => handleDeleteAdmin(admin.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
                       </div>
                     )}
                   </div>
@@ -671,6 +736,34 @@ function AdminPageInner() {
                 <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'resolved')} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"><CheckCircle2 className="w-4 h-4" />标记已解决</button>
                 <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'rejected')} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-destructive text-white rounded-lg hover:bg-destructive/90 transition-colors"><XCircle className="w-4 h-4" />驳回</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Introduction Editor Modal */}
+      {showIntroEditor && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-card border border-border rounded-2xl max-w-2xl w-full animate-scale-in overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-foreground">编辑族谱介绍 - {allGenealogies.find(g => g.id === introEditorId)?.name}</h3>
+              <button onClick={handleSaveIntros} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-secondary transition-colors"><XCircle className="w-4 h-4 text-muted-foreground" /></button>
+            </div>
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {introPages.map((page, i) => (
+                <div key={i} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-foreground">第 {i + 1} 页</label>
+                    <button onClick={() => setIntroPages(prev => prev.filter((_, idx) => idx !== i))} className="text-xs text-destructive hover:text-destructive/80">删除此页</button>
+                  </div>
+                  <textarea value={page} onChange={(e) => setIntroPages(prev => prev.map((p, idx) => idx === i ? e.target.value : p))} rows={6} className="w-full px-4 py-3 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" placeholder="输入介绍内容..." />
+                </div>
+              ))}
+              <button onClick={() => setIntroPages(prev => [...prev, ''])} className="w-full py-3 border-2 border-dashed border-border rounded-lg text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 transition-colors">+ 添加新页面</button>
+            </div>
+            <div className="px-6 py-4 border-t border-border flex gap-3">
+              <button onClick={() => setShowIntroEditor(false)} className="flex-1 px-4 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">取消</button>
+              <button onClick={handleSaveIntros} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"><Save className="w-4 h-4" />保存</button>
             </div>
           </div>
         </div>
