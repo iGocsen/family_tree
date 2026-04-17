@@ -33,7 +33,6 @@ export default function TreeView({
   const isExpanded = expandedGenerations.has(person.generation);
   const isSelected = selectedPersonId === person.id;
 
-  // Don't render if outside visible range
   if (person.generation < visibleRange.minGen || person.generation > visibleRange.maxGen) {
     return null;
   }
@@ -78,17 +77,23 @@ export default function TreeView({
       {/* Children with connectors */}
       {hasAnyChildren && (
         <>
+          {/* Vertical line from parent */}
           <div className="w-px h-4 bg-border" />
+
           {isExpanded ? (
             <>
-              {visibleChildren.length > 1 && (
-                <div className="relative w-full flex justify-center">
-                  <div className="absolute top-0 h-px bg-border" style={{ left: `${100 / (visibleChildren.length * 2)}%`, right: `${100 / (visibleChildren.length * 2)}%` }} />
-                </div>
-              )}
-              <div className="flex justify-center gap-3 pt-0">
-                {visibleChildren.map(child => (
-                  <div key={child.id} className="flex flex-col items-center">
+              {/* Children row with tree connectors */}
+              <div className="flex justify-center">
+                {visibleChildren.map((child, index) => (
+                  <div key={child.id} className="relative flex flex-col items-center" style={{ minWidth: '130px' }}>
+                    {/* Horizontal connector bar */}
+                    {visibleChildren.length > 1 && (
+                      <div className="absolute top-0 h-px bg-border" style={{
+                        left: index === 0 ? '50%' : 0,
+                        right: index === visibleChildren.length - 1 ? '50%' : 0,
+                      }} />
+                    )}
+                    {/* Vertical line to child */}
                     <div className="w-px h-4 bg-border" />
                     <TreeView
                       genealogyId={genealogyId}
@@ -104,6 +109,7 @@ export default function TreeView({
                   </div>
                 ))}
               </div>
+
               {hasMoreBelow && (
                 <div className="mt-2 inline-flex items-center gap-1 px-2 py-0.5 bg-secondary/80 rounded-full">
                   <ChevronDown className="w-2.5 h-2.5 text-muted-foreground" />

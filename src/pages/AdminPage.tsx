@@ -213,12 +213,12 @@ function AdminPageInner() {
   const feedbackTypeLabels: Record<string, string> = { 'info-error': '信息有误', 'missing-info': '信息缺失', 'duplicate': '重复记录', 'other': '其他问题' };
   const fieldLabels: Record<string, string> = { name: '姓名', birthYear: '出生年份', deathYear: '逝世年份', biography: '生平介绍', spouse: '配偶', achievements: '主要成就' };
 
-  // All genealogies: base + custom
+  // All genealogies: base + custom (no isCustom flag needed)
   const allGenealogies = useMemo(() => {
-    const base = genealogies.map(g => ({ ...g, isCustom: false }));
+    const base = genealogies.map(g => ({ ...g }));
     const custom = customGenealogies.map(cg => ({
       id: cg.id, name: cg.name, description: cg.description, origin: cg.origin,
-      foundingYear: cg.foundingYear, isCustom: true,
+      foundingYear: cg.foundingYear,
       ancestor: Object.values(cg.people).find(p => p.generation === 1),
       people: cg.people,
     }));
@@ -236,7 +236,17 @@ function AdminPageInner() {
 
   const selectedGenealogy = allGenealogies.find(g => g.id === newPersonForm.genealogyId);
   const selectedGenealogyForEdit = allGenealogies.find(g => g.id === editForm.genealogyId);
-  const availablePersons = selectedGenealogyForEdit ? Object.values(selectedGenealogyForEdit.people) : [];
+  const basePersons = selectedGenealogyForEdit ? Object.values(selectedGenealogyForEdit.people) : [];
+  const approvedPersonsForEdit = getApprovedPersonsByGenealogy(editForm.genealogyId);
+  const availablePersons = [...basePersons, ...approvedPersonsForEdit.map(ap => ({
+    id: ap.id, name: ap.name, generation: ap.generation,
+    birthYear: ap.birthYear, deathYear: ap.deathYear,
+    gender: ap.gender as 'male' | 'female',
+    biography: ap.biography,
+    achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+    parentId: ap.parentId,
+    spouse: ap.spouse,
+  } as any))];
 
   const availableParents = useMemo(() => {
     if (!selectedGenealogy || newPersonForm.generation <= 1) return [];
@@ -258,13 +268,14 @@ function AdminPageInner() {
   const handleSaveGenealogy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!genealogyForm.id || !genealogyForm.name) return;
-    const existing = allGenealogies.find(g => g.id === genealogyForm.id && !g.isCustom);
+    const isBaseGenealogy = genealogies.some(g => g.id === genealogyForm.id);
     if (editingGenealogyId) {
       updateCustomGenealogy(editingGenealogyId, genealogyForm);
       setEditingGenealogyId(null);
-    } else if (existing) {
-      // Update base genealogy via custom overlay
-      saveCustomGenealogy({ ...genealogyForm, people: existing.people, introductions: [] });
+    } else if (isBaseGenealogy) {
+      // Override base genealogy metadata via custom overlay
+      const base = genealogies.find(g => g.id === genealogyForm.id);
+      saveCustomGenealogy({ ...genealogyForm, people: base?.people || {}, introductions: [] });
     } else {
       saveCustomGenealogy({ ...genealogyForm, people: {}, introductions: [] });
     }
@@ -278,7 +289,14 @@ function AdminPageInner() {
   };
 
   const handleDeleteGenealogy = (id: string) => {
-    deleteCustomGenealogy(id);
+    const isBase = genealogies.some(g => g.id === id);
+    if (isBase) {
+      // For base genealogies, remove the custom overlay
+      const list = getCustomGenealogies().filter(g => g.id !== id);
+      localStorage.setItem('genealogy_custom', JSON.stringify(list));
+    } else {
+      deleteCustomGenealogy(id);
+    }
     refreshData();
   };
 
@@ -444,7 +462,7 @@ function AdminPageInner() {
                     </select></div>
                     {editForm.genealogyId && (<>
                       <div><label className="block text-sm font-medium text-foreground mb-1">选择人物</label><select value={editForm.personId} onChange={(e) => handlePersonSelect(e.target.value)} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required>
-                        <option value="">请选择人物</option>{availablePersons.sort((a, b) => a.generation - b.generation).map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''}</option>))}
+                        <option value="">请选择人物</option>{availablePersons.sort((a: any, b: any) => a.generation - b.generation).map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''}</option>))}
                       </select></div>
                       {editForm.personId && (<>
                         <div><label className="block text-sm font-medium text-foreground mb-1">修改字段</label><select value={editForm.field} onChange={(e) => { const field = e.target.value; const genealogy = getGenealogy(editForm.genealogyId); const person = genealogy?.people[editForm.personId]; const fv: Record<string, string> = { name: person?.name || '', birthYear: person?.birthYear || '', deathYear: person?.deathYear || '', biography: person?.biography || '', spouse: person?.spouse || '', achievements: person?.achievements?.join('\n') || '' }; setEditForm(prev => ({ ...prev, field, oldValue: fv[field] || '' })); }} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
@@ -528,7 +546,7 @@ function AdminPageInner() {
                       <div><label className="block text-sm font-medium text-foreground mb-1">父亲（选填）</label><select value={newPersonForm.parentId} onChange={(e) => setNewPersonForm(prev => ({ ...prev, parentId: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
                         <option value="">无（新增分支始祖）</option>
                         {availableParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''}</option>))}
-                        {approvedParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''} [手工]</option>))}
+                        {approvedParents.map(p => (<option key={p.id} value={p.id}>第{p.generation}世 - {p.name}{p.birthYear ? ` (${p.birthYear})` : ''} [新增]</option>))}
                       </select>{newPersonForm.parentId && (<p className="text-xs text-muted-foreground mt-1">提示：世系将自动设为父亲世系 + 1（第{(() => { const baseP = selectedGenealogy?.people[newPersonForm.parentId]; const appP = approvedParents.find(x => x.id === newPersonForm.parentId); const p = baseP || appP; return p?.generation ? p.generation + 1 : '?'; })()}世）</p>)}</div>
                       <div><label className="block text-sm font-medium text-foreground mb-1">配偶</label><input type="text" value={newPersonForm.spouse} onChange={(e) => setNewPersonForm(prev => ({ ...prev, spouse: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
                       <div><label className="block text-sm font-medium text-foreground mb-1">生平介绍</label><textarea value={newPersonForm.biography} onChange={(e) => setNewPersonForm(prev => ({ ...prev, biography: e.target.value }))} rows={3} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
@@ -603,7 +621,8 @@ function AdminPageInner() {
 
             <div className="space-y-3">
               {allGenealogies.map(g => {
-                const personCount = Object.keys(g.people).length;
+                const mergedG = getGenealogy(g.id);
+                const personCount = mergedG ? Object.keys(mergedG.people).length : Object.keys(g.people).length;
                 const hasCustom = !!customGenealogies.find(cg => cg.id === g.id);
                 return (
                   <div key={g.id} className="bg-card border border-border rounded-xl p-5">
@@ -623,7 +642,7 @@ function AdminPageInner() {
                       <div className="flex flex-col gap-2">
                         <button onClick={() => handleEditGenealogy(g)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
                         <button onClick={() => handleOpenIntroEditor(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs hover:bg-primary/20 transition-colors"><FileText className="w-3.5 h-3.5" />{getGenealogyIntroductions(g.id).length > 0 ? '修改更多介绍' : '创建更多介绍'}</button>
-                        {hasCustom && (<button onClick={() => handleDeleteGenealogy(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>)}
+                        <button onClick={() => handleDeleteGenealogy(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
                       </div>
                     </div>
                   </div>
@@ -659,7 +678,6 @@ function AdminPageInner() {
                           <label key={g.id} className="flex items-center gap-2 text-sm">
                             <input type="checkbox" checked={adminForm.editableGenealogies.length === 0 || adminForm.editableGenealogies.includes(g.id)} onChange={(e) => {
                               if (adminForm.editableGenealogies.length === 0) {
-                                // Currently all, now uncheck this one
                                 setAdminForm(prev => ({ ...prev, editableGenealogies: allGenealogies.map(x => x.id).filter(id => id !== g.id) }));
                               } else if (e.target.checked) {
                                 setAdminForm(prev => ({ ...prev, editableGenealogies: [...prev.editableGenealogies, g.id] }));

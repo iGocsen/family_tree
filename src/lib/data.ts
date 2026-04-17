@@ -1,26 +1,12 @@
 export interface Person {
-  id: string;
-  name: string;
-  generation: number;
-  birthYear?: string;
-  deathYear?: string;
-  gender: 'male' | 'female';
-  spouse?: string;
-  children?: string[];
-  parentId?: string;
-  biography: string;
-  achievements?: string[];
-  notes?: string;
+  id: string; name: string; generation: number; birthYear?: string; deathYear?: string;
+  gender: 'male' | 'female'; spouse?: string; children?: string[]; parentId?: string;
+  biography: string; achievements?: string[]; notes?: string;
 }
 
 export interface Genealogy {
-  id: string;
-  name: string;
-  description: string;
-  origin: string;
-  foundingYear: string;
-  ancestor: Person;
-  people: Record<string, Person>;
+  id: string; name: string; description: string; origin: string; foundingYear: string;
+  ancestor: Person; people: Record<string, Person>;
 }
 
 const buildPeople = (people: Person[]): Record<string, Person> => {
@@ -185,26 +171,49 @@ let mergedCache: Record<string, { genealogy: Genealogy; timestamp: number }> = {
 
 /**
  * Get genealogy with approved new persons merged in.
+ * Also merges custom genealogy data (name, description, etc.) if overridden.
  */
 export function getGenealogy(id: string): Genealogy | undefined {
   const base = genealogies.find(g => g.id === id);
-  if (!base) return undefined;
+
+  // Check for custom genealogy overrides
+  let customOverride: any = null;
+  try {
+    const data = localStorage.getItem('genealogy_custom');
+    if (data) {
+      const customs = JSON.parse(data);
+      customOverride = customs.find((g: any) => g.id === id);
+    }
+  } catch { /* ignore */ }
+
+  if (!base && !customOverride) return undefined;
 
   const cached = mergedCache[id];
   if (cached && Date.now() - cached.timestamp < 5000) return cached.genealogy;
 
+  // Start with base or custom people
+  let people = base ? { ...base.people } : {};
+  let name = base?.name || customOverride?.name || '';
+  let description = base?.description || customOverride?.description || '';
+  let origin = base?.origin || customOverride?.origin || '';
+  let foundingYear = base?.foundingYear || customOverride?.foundingYear || '';
+  let ancestor = base?.ancestor || Object.values(people).find(p => p.generation === 1);
+
+  // Apply custom genealogy overrides for name/description
+  if (customOverride) {
+    if (customOverride.name) name = customOverride.name;
+    if (customOverride.description) description = customOverride.description;
+    if (customOverride.origin) origin = customOverride.origin;
+    if (customOverride.foundingYear) foundingYear = customOverride.foundingYear;
+  }
+
+  // Merge approved new persons
   let approvedPersons: any[] = [];
   try {
     const data = localStorage.getItem('genealogy_new_persons');
     if (data) approvedPersons = JSON.parse(data).filter((p: any) => p.genealogyId === id && p.status === 'approved');
   } catch { /* ignore */ }
 
-  if (approvedPersons.length === 0) {
-    mergedCache[id] = { genealogy: base, timestamp: Date.now() };
-    return base;
-  }
-
-  const mergedPeople = { ...base.people };
   for (const ap of approvedPersons) {
     const person: Person = {
       id: ap.id, name: ap.name, generation: ap.generation,
@@ -213,10 +222,12 @@ export function getGenealogy(id: string): Genealogy | undefined {
       biography: ap.biography,
       achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
     };
-    mergedPeople[ap.id] = person;
+    people[ap.id] = person;
   }
 
-  const merged: Genealogy = { ...base, people: mergedPeople };
+  if (!ancestor) ancestor = Object.values(people).find(p => p.generation === 1);
+
+  const merged: Genealogy = { id, name, description, origin, foundingYear, ancestor: ancestor!, people };
   mergedCache[id] = { genealogy: merged, timestamp: Date.now() };
   return merged;
 }

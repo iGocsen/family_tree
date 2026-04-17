@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { genealogies, getMaxGeneration } from '@/lib/data';
 import { getCustomGenealogies } from '@/lib/store';
@@ -7,14 +7,20 @@ import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText, Sear
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const customGenealogies = getCustomGenealogies();
+  const [customGenealogies, setCustomGenealogies] = useState(getCustomGenealogies());
 
-  // Combine base + custom genealogies
+  // Refresh custom genealogies periodically
+  useEffect(() => {
+    const interval = setInterval(() => setCustomGenealogies(getCustomGenealogies()), 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Combine base + custom genealogies (no "自定义" tag)
   const allGenealogies = useMemo(() => {
-    const base = genealogies.map(g => ({ ...g, isCustom: false }));
+    const base = genealogies.map(g => ({ ...g }));
     const custom = customGenealogies.map(cg => ({
       id: cg.id, name: cg.name, description: cg.description, origin: cg.origin,
-      foundingYear: cg.foundingYear, isCustom: true,
+      foundingYear: cg.foundingYear,
       ancestor: Object.values(cg.people).find(p => p.generation === 1),
       people: cg.people,
     }));
@@ -33,9 +39,10 @@ export default function HomePage() {
   }, [allGenealogies, searchQuery]);
 
   // Responsive grid
-  const gridClass = allGenealogies.length <= 1
+  const count = filteredGenealogies.length;
+  const gridClass = count <= 1
     ? 'grid-cols-1 max-w-md mx-auto'
-    : allGenealogies.length === 2 || allGenealogies.length === 4 || allGenealogies.length === 7
+    : count === 2 || count === 4 || count === 7
       ? 'grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto'
       : 'grid-cols-1 md:grid-cols-3';
 
@@ -103,14 +110,9 @@ export default function HomePage() {
                       </svg>
                     </div>
                     <div className="relative">
-                      <div className="flex items-center gap-2 mb-4">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium">
-                          <Users className="w-3.5 h-3.5" />
-                          <span>{genLabel}</span>
-                        </div>
-                        {genealogy.isCustom && (
-                          <span className="text-xs px-2 py-0.5 bg-accent/10 text-accent rounded-full">自定义</span>
-                        )}
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium mb-4">
+                        <Users className="w-3.5 h-3.5" />
+                        <span>{genLabel}</span>
                       </div>
                       <h2 className="text-2xl font-bold text-foreground mb-3 group-hover:text-primary transition-colors">
                         {genealogy.name}
