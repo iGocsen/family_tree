@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { HashRouter, Routes, Route } from 'react-router-dom';
 import { Toaster } from '@/components/ui/toaster';
 import HomePage from '@/pages/HomePage';
 import GenealogyPage from '@/pages/GenealogyPage';
@@ -7,7 +7,7 @@ import IntroductionPage from '@/pages/IntroductionPage';
 
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/genealogy/:id" element={<GenealogyPage />} />
@@ -15,7 +15,7 @@ function App() {
         <Route path="/admin" element={<AdminPage />} />
       </Routes>
       <Toaster />
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 

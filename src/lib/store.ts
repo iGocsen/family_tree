@@ -1,7 +1,7 @@
-import { Person, genealogies } from '@/lib/data';
-import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, migrateToSupabase as migrateToSupabaseImpl } from './supabase';
+import { Person, genealogies as baseGenealogies, setPeopleCache } from '@/lib/data';
+import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData } from './supabase';
 
-export { migrateToSupabaseImpl as migrateToSupabase };
+export { seedBaseData };
 
 export interface FeedbackRecord {
   id: string; genealogyId: string; genealogyName: string; personId: string; personName: string;
@@ -39,21 +39,32 @@ let peopleCache: Record<string, Person[]> = {};
 let feedbacksCache: FeedbackRecord[] = [];
 let editsCache: PersonEdit[] = [];
 let adminsCache: AdminUser[] = [];
+let isInitialized = false;
 
 // ===== Auth =====
 const AUTH_KEY = 'genealogy_admin_auth';
 
-export function login(username: string, password: string): boolean {
-  const admin = adminsCache.find(a => a.username === username && a.password === password);
-  if (admin && admin.status === 'active') {
-    localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: admin.id }));
-    return true;
+export async function login(username: string, password: string): Promise<boolean> {
+  // Validate against Supabase database
+  const { data, error } = await supabase
+    .from('admins')
+    .select('*')
+    .eq('username', username)
+    .eq('password_hash', password)
+    .eq('status', 'active')
+    .single();
+
+  if (error || !data) {
+    // Fallback to default admin for first-time setup
+    if (username === 'admin' && password === 'password') {
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: 'default' }));
+      return true;
+    }
+    return false;
   }
-  if (username === 'admin' && password === 'password') {
-    localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: 'default' }));
-    return true;
-  }
-  return false;
+
+  localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: data.id }));
+  return true;
 }
 
 export function logout(): void { localStorage.removeItem(AUTH_KEY); }
@@ -75,8 +86,14 @@ export function getCurrentUserId(): string | null {
 
 // ===== Data Refresh =====
 export async function refreshAllData(): Promise<void> {
-  const [genealogiesData, feedbacks, edits, admins] = await Promise.all([
+  if (isInitialized) return;
+  
+  // Seed base data if needed
+  await seedBaseData();
+
+  const [genealogiesData, allPeople, feedbacks, edits, admins] = await Promise.all([
     fetchGenealogies(),
+    fetchAllPeople(),
     fetchFeedbacks(),
     fetchPersonEdits(),
     fetchAdmins(),
@@ -86,6 +103,28 @@ export async function refreshAllData(): Promise<void> {
     id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
     foundingYear: g.founding_year || '', people: {}, introductions: g.introductions || [],
   }));
+
+  // Group people by genealogy
+  peopleCache = {};
+  const dataPeopleCache: Record<string, Record<string, Person>> = {};
+  for (const p of allPeople) {
+    if (!peopleCache[p.genealogy_id]) peopleCache[p.genealogy_id] = [];
+    if (!dataPeopleCache[p.genealogy_id]) dataPeopleCache[p.genealogy_id] = {};
+    
+    const person: Person = {
+      id: p.id, name: p.name, generation: p.generation,
+      birthYear: p.birth_year || undefined, deathYear: p.death_year || undefined,
+      gender: p.gender, spouse: p.spouse || undefined, parentId: p.parent_id || undefined,
+      biography: p.biography || '',
+      achievements: p.achievements ? p.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+    };
+    
+    peopleCache[p.genealogy_id].push(person);
+    dataPeopleCache[p.genealogy_id][p.id] = person;
+  }
+
+  // Set the people cache in data.ts
+  setPeopleCache(dataPeopleCache);
 
   feedbacksCache = feedbacks.map(f => ({
     id: f.id, genealogyId: f.genealogy_id, genealogyName: f.genealogy_name,
@@ -108,30 +147,7 @@ export async function refreshAllData(): Promise<void> {
     createdAt: a.created_at,
   }));
 
-  // Add default admin if not exists
-  if (!adminsCache.find(a => a.id === 'default')) {
-    adminsCache.unshift({
-      id: 'default', username: 'admin', password: 'password', displayName: '超级管理员',
-      role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString(),
-    });
-  }
-
-  // Fetch people for each genealogy
-  const allGenealogyIds = [...new Set([
-    ...genealogiesData.map((g: any) => g.id),
-    ...feedbacks.map((f: any) => f.genealogy_id),
-    ...edits.map((e: any) => e.genealogy_id),
-  ])];
-  for (const gid of allGenealogyIds) {
-    const people = await fetchPeople(gid);
-    peopleCache[gid] = people.map(p => ({
-      id: p.id, name: p.name, generation: p.generation,
-      birthYear: p.birth_year || undefined, deathYear: p.death_year || undefined,
-      gender: p.gender, spouse: p.spouse || undefined, parentId: p.parent_id || undefined,
-      biography: p.biography || '',
-      achievements: p.achievements ? p.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
-    }));
-  }
+  isInitialized = true;
 }
 
 export async function refreshGenealogyPeople(genealogyId: string): Promise<void> {
