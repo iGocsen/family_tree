@@ -1,5 +1,5 @@
 import { Person, setSupabaseCache, Genealogy } from '@/lib/data';
-import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl, fetchGenealogyIntroductions, saveGenealogyIntroductions, deleteGenealogyIntroductions } from './supabase';
+import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl, fetchGenealogyIntroductions, saveGenealogyIntroductions, deleteGenealogyIntroductions, fetchPersonAdditions, approvePersonAddition, rejectPersonAddition, savePersonAddition } from './supabase';
 
 export { seedBaseData, migrateToSupabaseImpl as migrateToSupabase };
 
@@ -33,6 +33,13 @@ export interface AdminUser {
   status: 'active' | 'disabled'; editableGenealogies: string[]; createdAt: string;
 }
 
+export interface PersonAddition {
+  id: string; genealogyId: string; name: string; generation: number;
+  birthYear: string; deathYear: string; gender: 'male' | 'female';
+  spouse: string; parentId: string; biography: string; achievements: string;
+  status: 'pending' | 'approved' | 'rejected'; createdAt: string;
+}
+
 // Cloud data caches
 let genealogiesCache: CustomGenealogy[] = [];
 let peopleCache: Record<string, Person[]> = {};
@@ -40,6 +47,7 @@ let feedbacksCache: FeedbackRecord[] = [];
 let editsCache: PersonEdit[] = [];
 let adminsCache: AdminUser[] = [];
 let introductionsCache: Record<string, string[]> = {};
+let personAdditionsCache: PersonAddition[] = [];
 let isInitialized = false;
 
 // ===== Auth =====
@@ -84,15 +92,26 @@ export function getCurrentUserId(): string | null {
 }
 
 // ===== Data Refresh =====
-// NOTE: Does NOT auto-seed. Seeding only happens via migrateToSupabase() button.
 export async function refreshAllData(): Promise<void> {
-  const [genealogiesData, allPeople, feedbacks, edits, admins] = await Promise.all([
-    fetchGenealogies(),
-    fetchAllPeople(),
-    fetchFeedbacks(),
-    fetchPersonEdits(),
-    fetchAdmins(),
-  ]);
+  let genealogiesData: any[] = [];
+  let allPeople: any[] = [];
+  let feedbacks: any[] = [];
+  let edits: any[] = [];
+  let admins: any[] = [];
+  let personAdditions: any[] = [];
+
+  try {
+    [genealogiesData, allPeople, feedbacks, edits, admins, personAdditions] = await Promise.all([
+      fetchGenealogies(),
+      fetchAllPeople(),
+      fetchFeedbacks(),
+      fetchPersonEdits(),
+      fetchAdmins(),
+      fetchPersonAdditions(),
+    ]);
+  } catch (err) {
+    console.warn('Failed to fetch data from Supabase:', err);
+  }
 
   genealogiesCache = genealogiesData.map(g => ({
     id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
@@ -119,11 +138,21 @@ export async function refreshAllData(): Promise<void> {
     dataPeopleCache[p.genealogy_id][p.id] = person;
   }
 
+  // Store person additions cache
+  personAdditionsCache = personAdditions.map(pa => ({
+    id: pa.id, genealogyId: pa.genealogy_id, name: pa.name, generation: pa.generation,
+    birthYear: pa.birth_year || '', deathYear: pa.death_year || '', gender: pa.gender || 'male',
+    spouse: pa.spouse || '', parentId: pa.parent_id || '', biography: pa.biography || '',
+    achievements: pa.achievements || '', status: pa.status || 'pending', createdAt: pa.created_at,
+  }));
+
   // Fetch introductions for each genealogy
   introductionsCache = {};
   for (const g of genealogiesData) {
-    const intruPages = await fetchGenealogyIntroductions(g.id);
-    introductionsCache[g.id] = intruPages.map((p: any) => p.content);
+    try {
+      const intruPages = await fetchGenealogyIntroductions(g.id);
+      introductionsCache[g.id] = intruPages.map((p: any) => p.content);
+    } catch { /* ignore */ }
   }
 
   // Set the Supabase cache in data.ts
@@ -133,16 +162,7 @@ export async function refreshAllData(): Promise<void> {
     ancestor: dataPeopleCache[g.id] ? Object.values(dataPeopleCache[g.id]).find(p => !p.parentId) || Object.values(dataPeopleCache[g.id]).find(p => p.generation === 1) || null : null,
     people: dataPeopleCache[g.id] || {},
   }));
-  // Merge with existing genealogiesCache (preserves custom genealogies)
-  for (const g of genealogiesForCache) {
-    const idx = genealogiesCache.findIndex(cg => cg.id === g.id);
-    if (idx >= 0) {
-      genealogiesCache[idx] = { ...genealogiesCache[idx], ...g };
-    } else {
-      genealogiesCache.push(g);
-    }
-  }
-  setSupabaseCache(genealogiesCache, dataPeopleCache, introductionsCache);
+  setSupabaseCache(genealogiesForCache, dataPeopleCache, introductionsCache);
 
   feedbacksCache = feedbacks.map(f => ({
     id: f.id, genealogyId: f.genealogy_id, genealogyName: f.genealogy_name,
@@ -299,7 +319,7 @@ export function getPersonEdits(): PersonEdit[] {
 
 export async function savePersonEdit(edit: Omit<PersonEdit, 'id' | 'status' | 'createdAt'>): Promise<PersonEdit> {
   const newEdit: PersonEdit = { ...edit, id: `edit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending', createdAt: new Date().toISOString() };
-  editsCache.unshift(newEdit);
+  // Don't add to cache here - refreshData will fetch from Supabase
   await saveEditToCloud({
     id: newEdit.id, genealogy_id: newEdit.genealogyId, genealogy_name: newEdit.genealogyName,
     person_id: newEdit.personId, person_name: newEdit.personName, field: newEdit.field,
@@ -337,99 +357,103 @@ export async function deleteEdit(id: string): Promise<void> {
   await deleteEditFromCloud(id);
 }
 
-// ===== New Persons (Pending) =====
+// ===== Person Additions (person_add table) =====
 export function getNewPersons(): (NewPersonData & { id: string; status: string; createdAt: string })[] {
-  const result: (NewPersonData & { id: string; status: string; createdAt: string })[] = [];
-  for (const [gid, people] of Object.entries(peopleCache)) {
-    for (const p of people) {
-      if ((p as any).status === 'pending') {
-        result.push({
-          id: p.id, genealogyId: gid, name: p.name, generation: p.generation,
-          birthYear: p.birthYear || '', deathYear: p.deathYear || '',
-          gender: p.gender, spouse: p.spouse || '', parentId: p.parentId || '',
-          biography: p.biography, achievements: p.achievements?.join('\n') || '',
-          status: 'pending', createdAt: (p as any).createdAt || '',
-        });
-      }
-    }
-  }
-  return result;
+  return personAdditionsCache.map(pa => ({
+    id: pa.id, genealogyId: pa.genealogyId, name: pa.name, generation: pa.generation,
+    birthYear: pa.birthYear, deathYear: pa.deathYear,
+    gender: pa.gender, spouse: pa.spouse, parentId: pa.parentId,
+    biography: pa.biography, achievements: pa.achievements,
+    status: pa.status, createdAt: pa.createdAt,
+  }));
 }
 
 export async function saveNewPerson(data: Omit<NewPersonData, 'id'> & { id?: string }): Promise<NewPersonData & { id: string; status: string; createdAt: string }> {
-  const newPerson = { ...data, id: data.id || `new_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending', createdAt: new Date().toISOString() };
-  const person: Person = {
-    id: newPerson.id, name: newPerson.name, generation: newPerson.generation,
-    birthYear: newPerson.birthYear || undefined, deathYear: newPerson.deathYear || undefined,
-    gender: newPerson.gender, spouse: newPerson.spouse || undefined, parentId: newPerson.parentId || undefined,
-    biography: newPerson.biography,
-    achievements: newPerson.achievements ? newPerson.achievements.split('\n').filter(a => a.trim()) : undefined,
+  const newAddition: PersonAddition = {
+    ...data,
+    id: data.id || `add_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
   };
-  if (!peopleCache[newPerson.genealogyId]) peopleCache[newPerson.genealogyId] = [];
-  (person as any).status = 'pending';
-  (person as any).createdAt = newPerson.createdAt;
-  peopleCache[newPerson.genealogyId].push(person);
-  await savePersonToCloud({
-    id: newPerson.id, genealogy_id: newPerson.genealogyId, name: newPerson.name, generation: newPerson.generation,
-    birth_year: newPerson.birthYear, death_year: newPerson.deathYear, gender: newPerson.gender,
-    spouse: newPerson.spouse, parent_id: newPerson.parentId, biography: newPerson.biography,
-    achievements: newPerson.achievements, status: 'pending', created_at: newPerson.createdAt,
+  personAdditionsCache.unshift(newAddition);
+  await savePersonAddition({
+    id: newAddition.id, genealogy_id: data.genealogyId, name: data.name, generation: data.generation,
+    birth_year: data.birthYear, death_year: data.deathYear, gender: data.gender,
+    spouse: data.spouse, parent_id: data.parentId, biography: data.biography,
+    achievements: data.achievements, status: 'pending', created_at: newAddition.createdAt,
   });
-  return newPerson;
+  return { ...data, id: newAddition.id, status: 'pending', createdAt: newAddition.createdAt };
 }
 
-export async function updateNewPersonStatus(id: string, status: string): Promise<void> {
-  for (const [gid, people] of Object.entries(peopleCache)) {
-    const idx = people.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      (people[idx] as any).status = status;
-      if (status === 'approved') (people[idx] as any).approvedAt = new Date().toISOString();
-      await savePersonToCloud({
-        id: people[idx].id, genealogy_id: gid, name: people[idx].name, generation: people[idx].generation,
-        birth_year: people[idx].birthYear || '', death_year: people[idx].deathYear || '', gender: people[idx].gender,
-        spouse: people[idx].spouse || '', parent_id: people[idx].parentId || '', biography: people[idx].biography,
-        achievements: people[idx].achievements?.join('\n') || '', status,
-        created_at: (people[idx] as any).createdAt || new Date().toISOString(),
-      });
-      break;
+export async function updateNewPersonStatus(id: string, action: string): Promise<void> {
+  const idx = personAdditionsCache.findIndex(p => p.id === id);
+  if (idx === -1) return;
+
+  if (action === 'approved') {
+    const pa = personAdditionsCache[idx];
+    // Approve: copy to people table, update person_add status
+    await approvePersonAddition(id, {
+      id: pa.id, genealogy_id: pa.genealogyId, name: pa.name, generation: pa.generation,
+      birth_year: pa.birthYear, death_year: pa.deathYear, gender: pa.gender,
+      spouse: pa.spouse, parent_id: pa.parentId, biography: pa.biography,
+      achievements: pa.achievements,
+    });
+    personAdditionsCache[idx].status = 'approved';
+    
+    // Update the local people cache
+    if (!peopleCache[pa.genealogyId]) peopleCache[pa.genealogyId] = [];
+    const newPerson: Person = {
+      id: pa.id, name: pa.name, generation: pa.generation,
+      birthYear: pa.birthYear || undefined, deathYear: pa.deathYear || undefined,
+      gender: pa.gender as 'male' | 'female', spouse: pa.spouse || undefined,
+      parentId: pa.parentId || undefined, biography: pa.biography,
+      achievements: pa.achievements ? pa.achievements.split('\n').filter(a => a.trim()) : undefined,
+      status: 'approved',
+    };
+    peopleCache[pa.genealogyId].push(newPerson);
+
+    // Also update the genealogiesCache people
+    const gIdx = genealogiesCache.findIndex(g => g.id === pa.genealogyId);
+    if (gIdx >= 0) {
+      genealogiesCache[gIdx].people[pa.id] = newPerson;
     }
+
+    // Update the Supabase cache in data.ts
+    setSupabaseCache(genealogiesCache.map(g => ({
+      id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
+      foundingYear: g.foundingYear || '',
+      ancestor: Object.values(g.people).find(p => !p.parentId) || Object.values(g.people).find(p => p.generation === 1) || null,
+      people: g.people,
+    })), peopleCache, introductionsCache);
+  } else if (action === 'rejected') {
+    await rejectPersonAddition(id);
+    personAdditionsCache[idx].status = 'rejected';
   }
 }
 
 export async function modifyNewPerson(id: string, updates: Partial<NewPersonData>): Promise<void> {
-  for (const [gid, people] of Object.entries(peopleCache)) {
-    const idx = people.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      if (updates.name) people[idx].name = updates.name;
-      if (updates.generation) people[idx].generation = updates.generation;
-      if (updates.birthYear) people[idx].birthYear = updates.birthYear;
-      if (updates.deathYear) people[idx].deathYear = updates.deathYear;
-      if (updates.gender) people[idx].gender = updates.gender;
-      if (updates.spouse !== undefined) people[idx].spouse = updates.spouse;
-      if (updates.parentId !== undefined) people[idx].parentId = updates.parentId;
-      if (updates.biography !== undefined) people[idx].biography = updates.biography;
-      if (updates.achievements !== undefined) people[idx].achievements = updates.achievements ? updates.achievements.split('\n').filter(a => a.trim()) : undefined;
-      await savePersonToCloud({
-        id: people[idx].id, genealogy_id: gid, name: people[idx].name, generation: people[idx].generation,
-        birth_year: people[idx].birthYear || '', death_year: people[idx].deathYear || '', gender: people[idx].gender,
-        spouse: people[idx].spouse || '', parent_id: people[idx].parentId || '', biography: people[idx].biography,
-        achievements: people[idx].achievements?.join('\n') || '', status: (people[idx] as any).status || 'pending',
-        created_at: (people[idx] as any).createdAt || new Date().toISOString(),
-      });
-      break;
-    }
-  }
+  const idx = personAdditionsCache.findIndex(p => p.id === id);
+  if (idx === -1) return;
+  personAdditionsCache[idx] = { ...personAdditionsCache[idx], ...updates };
+  await savePersonAddition({
+    id, genealogy_id: updates.genealogyId || personAdditionsCache[idx].genealogyId,
+    name: updates.name || personAdditionsCache[idx].name,
+    generation: updates.generation || personAdditionsCache[idx].generation,
+    birth_year: updates.birthYear ?? personAdditionsCache[idx].birthYear,
+    death_year: updates.deathYear ?? personAdditionsCache[idx].deathYear,
+    gender: updates.gender || personAdditionsCache[idx].gender,
+    spouse: updates.spouse ?? personAdditionsCache[idx].spouse,
+    parent_id: updates.parentId ?? personAdditionsCache[idx].parentId,
+    biography: updates.biography ?? personAdditionsCache[idx].biography,
+    achievements: updates.achievements ?? personAdditionsCache[idx].achievements,
+    status: personAdditionsCache[idx].status,
+    created_at: personAdditionsCache[idx].createdAt,
+  });
 }
 
 export async function deleteNewPerson(id: string): Promise<void> {
-  for (const [gid, people] of Object.entries(peopleCache)) {
-    const idx = people.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      people.splice(idx, 1);
-      await deletePersonFromCloud(id);
-      break;
-    }
-  }
+  personAdditionsCache = personAdditionsCache.filter(p => p.id !== id);
+  await deletePersonFromCloud(id);
 }
 
 // ===== Helpers =====

@@ -97,15 +97,30 @@ export function getTreeRoots(genealogyId: string, selectedPerson: Person, minGen
 
   const chain = getAncestorChain(genealogyId, selectedPerson.id);
   const ancestorAtMinGen = chain.find(p => p.generation === minGen);
-  if (!ancestorAtMinGen) return [];
-
-  if (minGen === 1) return getPersonsByGeneration(genealogyId, 1);
-
-  const ancestorParentId = ancestorAtMinGen.parentId;
-  if (ancestorParentId) {
-    return getPersonsByGeneration(genealogyId, minGen).filter(p => p.parentId === ancestorParentId);
+  
+  if (ancestorAtMinGen) {
+    // Found ancestor at minGen - return this ancestor and their siblings
+    if (minGen === 1) return getPersonsByGeneration(genealogyId, 1);
+    const ancestorParentId = ancestorAtMinGen.parentId;
+    if (ancestorParentId) {
+      return getPersonsByGeneration(genealogyId, minGen).filter(p => p.parentId === ancestorParentId);
+    }
+    return [ancestorAtMinGen];
   }
-  return [ancestorAtMinGen];
+
+  // No ancestor at minGen - the chain doesn't go back that far
+  // Use the oldest ancestor in the chain as the root
+  const oldestAncestor = chain[0];
+  if (oldestAncestor) {
+    // If the oldest ancestor has a parent, try to find their siblings
+    if (oldestAncestor.parentId) {
+      const siblings = getPersonsByGeneration(genealogyId, oldestAncestor.generation).filter(p => p.parentId === oldestAncestor.parentId);
+      if (siblings.length > 0) return siblings;
+    }
+    return [oldestAncestor];
+  }
+
+  return [];
 }
 
 export function getMaxGeneration(genealogyId: string): number {
