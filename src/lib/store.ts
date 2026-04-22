@@ -133,7 +133,16 @@ export async function refreshAllData(): Promise<void> {
     ancestor: dataPeopleCache[g.id] ? Object.values(dataPeopleCache[g.id]).find(p => !p.parentId) || Object.values(dataPeopleCache[g.id]).find(p => p.generation === 1) || null : null,
     people: dataPeopleCache[g.id] || {},
   }));
-  setSupabaseCache(genealogiesForCache, dataPeopleCache, introductionsCache);
+  // Merge with existing genealogiesCache (preserves custom genealogies)
+  for (const g of genealogiesForCache) {
+    const idx = genealogiesCache.findIndex(cg => cg.id === g.id);
+    if (idx >= 0) {
+      genealogiesCache[idx] = { ...genealogiesCache[idx], ...g };
+    } else {
+      genealogiesCache.push(g);
+    }
+  }
+  setSupabaseCache(genealogiesCache, dataPeopleCache, introductionsCache);
 
   feedbacksCache = feedbacks.map(f => ({
     id: f.id, genealogyId: f.genealogy_id, genealogyName: f.genealogy_name,
@@ -177,7 +186,8 @@ export function getCustomGenealogies(): CustomGenealogy[] {
 
 export async function saveCustomGenealogy(g: CustomGenealogy): Promise<void> {
   const idx = genealogiesCache.findIndex(x => x.id === g.id);
-  if (idx >= 0) genealogiesCache[idx] = g; else genealogiesCache.push(g);
+  const newGenealogy: CustomGenealogy = { ...g, people: idx >= 0 ? genealogiesCache[idx].people : {} };
+  if (idx >= 0) genealogiesCache[idx] = newGenealogy; else genealogiesCache.push(newGenealogy);
   await saveGenealogyToCloud({
     id: g.id, name: g.name, description: g.description, origin: g.origin,
     founding_year: g.foundingYear, is_base: false, created_at: new Date().toISOString(),
@@ -186,9 +196,10 @@ export async function saveCustomGenealogy(g: CustomGenealogy): Promise<void> {
 
 export async function deleteCustomGenealogy(id: string): Promise<void> {
   genealogiesCache = genealogiesCache.filter(g => g.id !== id);
+  delete peopleCache[id];
+  delete introductionsCache[id];
   await deleteGenealogyFromCloud(id);
   await deleteGenealogyIntroductions(id);
-  delete introductionsCache[id];
 }
 
 export function updateCustomGenealogy(id: string, updates: Partial<CustomGenealogy>): void {
@@ -210,6 +221,11 @@ export function updateGenealogyIntroductions(id: string, introductions: string[]
 
 export function getGenealogyIntroductions(id: string): string[] {
   return introductionsCache[id] || [];
+}
+
+// Get genealogy data from cache (includes both base and custom genealogies)
+export function getGenealogyData(id: string): Genealogy | undefined {
+  return genealogiesCache.find(g => g.id === id);
 }
 
 // ===== People =====

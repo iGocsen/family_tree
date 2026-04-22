@@ -12,7 +12,7 @@ import {
   migrateToSupabase, refreshAllData, getPeopleByGenealogy,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
-import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration, Person } from '@/lib/data';
+import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration, Person, getGenealogyIntroductionsFromCache } from '@/lib/data';
 import { savePersonToCloud, deletePersonFromCloud } from '@/lib/supabase';
 import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,

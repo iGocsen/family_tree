@@ -111,19 +111,19 @@ export async function savePersonAddition(p: any): Promise<void> {
 
 export async function approvePersonAddition(id: string, personData: any): Promise<void> {
   // Insert into people table
-  await supabase.from('people').insert({
+  await supabase.from('people').upsert({
     id: personData.id, genealogy_id: personData.genealogy_id, name: personData.name, generation: personData.generation,
     birth_year: personData.birth_year || '', death_year: personData.death_year || '', gender: personData.gender || 'male',
     spouse: personData.spouse || '', parent_id: personData.parent_id || '', biography: personData.biography || '',
     achievements: personData.achievements || '', status: 'approved',
-    created_at: new Date().toISOString(),
-  });
-  // Delete from person_add table
-  await supabase.from('person_add').delete().eq('id', id);
+    created_at: personData.created_at || new Date().toISOString(),
+  }, { onConflict: 'id' });
+  // Update person_add status to 'approved' (don't delete)
+  await supabase.from('person_add').update({ status: 'approved' }).eq('id', id);
 }
 
 export async function rejectPersonAddition(id: string): Promise<void> {
-  await supabase.from('person_add').delete().eq('id', id);
+  await supabase.from('person_add').update({ status: 'rejected' }).eq('id', id);
 }
 
 // ===== Feedbacks =====
