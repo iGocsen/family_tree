@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   getFeedbacks, updateFeedbackStatus, deleteFeedback,
   getPersonEdits, updateEditStatus, deleteEdit, modifyEdit,
@@ -9,7 +9,7 @@ import {
   getCustomGenealogies, saveCustomGenealogy, deleteCustomGenealogy, updateCustomGenealogy,
   getApprovedPersonsByGenealogy, getGenealogyIntroductions, updateGenealogyIntroductions,
   getAdmins, saveAdmin, deleteAdmin, updateAdminStatus,
-  migrateToSupabase,
+  migrateToSupabase, refreshAllData,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
 import { genealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
@@ -28,10 +28,14 @@ function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const navigate = useNavigate();
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setIsLoggingIn(true);
     await new Promise(r => setTimeout(r, 500));
-    if (login(username, password)) { window.location.reload(); }
+    if (login(username, password)) {
+      await refreshAllData();
+      navigate('/admin', { replace: true });
+    }
     else { setError('账号或密码错误'); }
     setIsLoggingIn(false);
   };
@@ -128,6 +132,7 @@ function AdminPageInner() {
     setMigrating(false);
   };
 
+  const navigate = useNavigate();
   const refreshData = () => {
     setFeedbacks(getFeedbacks()); setEdits(getPersonEdits()); setNewPersons(getNewPersons());
     setStats(getStats()); setCustomGenealogies(getCustomGenealogies()); setAdmins(getAdmins());

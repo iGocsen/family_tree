@@ -75,14 +75,14 @@ export function getCurrentUserId(): string | null {
 
 // ===== Data Refresh =====
 export async function refreshAllData(): Promise<void> {
-  const [genealogies, feedbacks, edits, admins] = await Promise.all([
+  const [genealogiesData, feedbacks, edits, admins] = await Promise.all([
     fetchGenealogies(),
     fetchFeedbacks(),
     fetchPersonEdits(),
     fetchAdmins(),
   ]);
 
-  genealogiesCache = genealogies.map(g => ({
+  genealogiesCache = genealogiesData.map(g => ({
     id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
     foundingYear: g.founding_year || '', people: {}, introductions: g.introductions || [],
   }));
@@ -118,7 +118,7 @@ export async function refreshAllData(): Promise<void> {
 
   // Fetch people for each genealogy
   const allGenealogyIds = [...new Set([
-    ...genealogies.map((g: any) => g.id),
+    ...genealogiesData.map((g: any) => g.id),
     ...feedbacks.map((f: any) => f.genealogy_id),
     ...edits.map((e: any) => e.genealogy_id),
   ])];
@@ -305,7 +305,6 @@ export async function deleteEdit(id: string): Promise<void> {
 }
 
 // ===== New Persons (Pending) =====
-// New persons are stored as people with status='pending'
 export function getNewPersons(): (NewPersonData & { id: string; status: string; createdAt: string })[] {
   const result: (NewPersonData & { id: string; status: string; createdAt: string })[] = [];
   for (const [gid, people] of Object.entries(peopleCache)) {

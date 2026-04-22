@@ -9,13 +9,13 @@ export interface Genealogy {
   ancestor: Person; people: Record<string, Person>;
 }
 
+// ===== Base Genealogies (hardcoded fallback) =====
 const buildPeople = (people: Person[]): Record<string, Person> => {
   const record: Record<string, Person> = {};
   people.forEach(p => { record[p.id] = p; });
   return record;
 };
 
-// ===== 李氏族谱 =====
 const liPeople = buildPeople([
   { id: 'li-1', name: '李明德', generation: 1, birthYear: '1680', deathYear: '1752', gender: 'male', biography: '李氏一世祖，字光远，号德庵。清康熙年间自福建漳州迁居广东潮州，以耕读传家，开创李氏一脉。为人忠厚，乐善好施，乡里称颂。', achievements: ['迁居潮州，开基立业', '建立家族义学', '修桥铺路，造福乡里'], children: ['li-2a', 'li-2b'] },
   { id: 'li-2a', name: '李守仁', generation: 2, birthYear: '1705', deathYear: '1778', gender: 'male', biography: '二世祖，字德厚。继承父志，勤耕苦读，以孝义闻名乡里。', children: ['li-3a'], parentId: 'li-1' },
@@ -64,7 +64,6 @@ const liPeople = buildPeople([
   { id: 'li-9i', name: '李志军', generation: 9, birthYear: '1920', deathYear: '2005', gender: 'male', biography: '九世，字军威。军人出身，参加过抗日战争和解放战争，后转业地方工作。', achievements: ['参加抗日战争', '参加解放战争'], parentId: 'li-8h' },
 ]);
 
-// ===== 张氏族谱 =====
 const zhangPeople = buildPeople([
   { id: 'zhang-1', name: '张文远', generation: 1, birthYear: '1690', deathYear: '1760', gender: 'male', biography: '张氏一世祖，字致远。清康熙末年自江西迁居湖南长沙，以耕读为业，开创张氏基业。', achievements: ['迁居长沙，开基立业', '建立宗祠'], children: ['zhang-2a', 'zhang-2b'] },
   { id: 'zhang-2a', name: '张守正', generation: 2, birthYear: '1715', deathYear: '1788', gender: 'male', biography: '二世祖，字正心。继承父业，勤于耕作。', children: ['zhang-3a'], parentId: 'zhang-1' },
@@ -113,7 +112,6 @@ const zhangPeople = buildPeople([
   { id: 'zhang-9i', name: '张建艺', generation: 9, birthYear: '1940', deathYear: '2020', gender: 'male', biography: '九世，字艺海。当代著名画家，作品被国家美术馆收藏。', achievements: ['当代著名画家'], parentId: 'zhang-8h' },
 ]);
 
-// ===== 陈氏族谱 =====
 const chenPeople = buildPeople([
   { id: 'chen-1', name: '陈德安', generation: 1, birthYear: '1700', deathYear: '1770', gender: 'male', biography: '陈氏一世祖，字安之。清康熙年间自河南迁居四川成都，以农桑为本，开创陈氏基业。', achievements: ['迁居成都，开基立业', '建立家族祠堂'], children: ['chen-2a', 'chen-2b'] },
   { id: 'chen-2a', name: '陈守业', generation: 2, birthYear: '1725', deathYear: '1798', gender: 'male', biography: '二世祖，字业勤。继承父业，勤于农桑。', children: ['chen-3a'], parentId: 'chen-1' },
@@ -159,157 +157,58 @@ const chenPeople = buildPeople([
   { id: 'chen-9h', name: '陈建金', generation: 9, birthYear: '1948', deathYear: '2028', gender: 'male', biography: '九世，字金融。金融学家，曾任证监会副主席。', achievements: ['证监会副主席'], parentId: 'chen-8g' },
 ]);
 
-// Base genealogies
+// Export base genealogies
 export const genealogies: Genealogy[] = [
   { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', foundingYear: '1680', ancestor: liPeople['li-1'], people: liPeople },
   { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', foundingYear: '1690', ancestor: zhangPeople['zhang-1'], people: zhangPeople },
   { id: 'chen', name: '陈氏族谱', description: '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', origin: '河南 → 四川成都', foundingYear: '1700', ancestor: chenPeople['chen-1'], people: chenPeople },
 ];
 
-// Cache for merged genealogies
-let mergedCache: Record<string, { genealogy: Genealogy; timestamp: number }> = {};
+// ===== Helper functions that work with the unified data =====
+// These functions will be overridden by store.ts when Supabase is initialized
 
-/**
- * Get all genealogy IDs (base + custom)
- */
-export function getAllGenealogyIds(): string[] {
-  const baseIds = genealogies.map(g => g.id);
-  try {
-    const data = localStorage.getItem('genealogy_custom');
-    if (data) {
-      const customs = JSON.parse(data);
-      const customIds = customs.map((g: any) => g.id).filter((id: string) => !baseIds.includes(id));
-      return [...baseIds, ...customIds];
-    }
-  } catch { /* ignore */ }
-  return baseIds;
+let _peopleOverride: Record<string, Record<string, Person>> = {};
+
+export function setPeopleOverride(people: Record<string, Record<string, Person>>): void {
+  _peopleOverride = people;
 }
 
-/**
- * Get genealogy with approved new persons merged in.
- * Also handles custom genealogies that were created from scratch.
- */
-export function getGenealogy(id: string): Genealogy | undefined {
-  const base = genealogies.find(g => g.id === id);
-
-  // Check for custom genealogy overrides
-  let customOverride: any = null;
-  try {
-    const data = localStorage.getItem('genealogy_custom');
-    if (data) {
-      const customs = JSON.parse(data);
-      customOverride = customs.find((g: any) => g.id === id);
-    }
-  } catch { /* ignore */ }
-
-  if (!base && !customOverride) return undefined;
-
-  const cached = mergedCache[id];
-  if (cached && Date.now() - cached.timestamp < 5000) return cached.genealogy;
-
-  // Start with base or custom people
-  let people = base ? { ...base.people } : {};
-  let name = base?.name || customOverride?.name || '';
-  let description = base?.description || customOverride?.description || '';
-  let origin = base?.origin || customOverride?.origin || '';
-  let foundingYear = base?.foundingYear || customOverride?.foundingYear || '';
-
-  // Apply custom genealogy overrides for name/description
-  if (customOverride) {
-    if (customOverride.name) name = customOverride.name;
-    if (customOverride.description) description = customOverride.description;
-    if (customOverride.origin) origin = customOverride.origin;
-    if (customOverride.foundingYear) foundingYear = customOverride.foundingYear;
-  }
-
-  // Merge approved new persons for this genealogy
-  let approvedPersons: any[] = [];
-  try {
-    const data = localStorage.getItem('genealogy_new_persons');
-    if (data) approvedPersons = JSON.parse(data).filter((p: any) => p.genealogyId === id && p.status === 'approved');
-  } catch { /* ignore */ }
-
-  for (const ap of approvedPersons) {
-    const person: Person = {
-      id: ap.id, name: ap.name, generation: ap.generation,
-      birthYear: ap.birthYear || undefined, deathYear: ap.deathYear || undefined,
-      gender: ap.gender, spouse: ap.spouse || undefined, parentId: ap.parentId || undefined,
-      biography: ap.biography,
-      achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
-    };
-    people[ap.id] = person;
-  }
-
-  // Find ancestor: first person with no parentId (could be any generation)
-  let ancestor = Object.values(people).find(p => !p.parentId);
-  // Fallback to gen 1
-  if (!ancestor) ancestor = Object.values(people).find(p => p.generation === 1);
-
-  const merged: Genealogy = { id, name, description, origin, foundingYear, ancestor: ancestor!, people };
-  mergedCache[id] = { genealogy: merged, timestamp: Date.now() };
-  return merged;
-}
-
-/**
- * Get max generation for a genealogy (including approved new persons)
- */
-export function getMaxGeneration(genealogyId: string): number {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return 0;
-  let maxGen = 0;
-  for (const p of Object.values(genealogy.people)) {
-    if (p.generation > maxGen) maxGen = p.generation;
-  }
-  return maxGen;
-}
-
-/**
- * Get min generation for a genealogy
- */
-export function getMinGeneration(genealogyId: string): number {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return 1;
-  let minGen = Infinity;
-  for (const p of Object.values(genealogy.people)) {
-    if (p.generation < minGen) minGen = p.generation;
-  }
-  return minGen === Infinity ? 1 : minGen;
+function getPeopleForGenealogy(genealogyId: string): Record<string, Person> {
+  if (_peopleOverride[genealogyId]) return _peopleOverride[genealogyId];
+  const base = genealogies.find(g => g.id === genealogyId);
+  return base ? base.people : {};
 }
 
 export function searchPerson(genealogyId: string, query: string): Person[] {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return [];
+  const people = getPeopleForGenealogy(genealogyId);
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  return Object.values(genealogy.people).filter(p => p.name.toLowerCase().includes(q));
+  return Object.values(people).filter(p => p.name.toLowerCase().includes(q));
 }
 
 export function getPerson(genealogyId: string, personId: string): Person | undefined {
-  const genealogy = getGenealogy(genealogyId);
-  return genealogy?.people[personId];
+  const people = getPeopleForGenealogy(genealogyId);
+  return people[personId];
 }
 
 export function getRootPerson(genealogyId: string): Person | undefined {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return undefined;
-  return Object.values(genealogy.people).find(p => !p.parentId) || Object.values(genealogy.people).find(p => p.generation === 1);
+  const people = getPeopleForGenealogy(genealogyId);
+  return Object.values(people).find(p => !p.parentId) || Object.values(people).find(p => p.generation === 1);
 }
 
 export function getChildren(genealogyId: string, parentId: string): Person[] {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return [];
-  return Object.values(genealogy.people).filter(p => p.parentId === parentId);
+  const people = getPeopleForGenealogy(genealogyId);
+  return Object.values(people).filter(p => p.parentId === parentId);
 }
 
 export function getAncestorChain(genealogyId: string, personId: string): Person[] {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return [];
+  const people = getPeopleForGenealogy(genealogyId);
   const chain: Person[] = [];
-  let current = genealogy.people[personId];
+  let current = people[personId];
   while (current) {
     chain.unshift(current);
     if (!current.parentId) break;
-    current = genealogy.people[current.parentId];
+    current = people[current.parentId];
   }
   return chain;
 }
@@ -326,14 +225,13 @@ export function getDescendants(genealogyId: string, personId: string, maxDepth?:
 }
 
 export function getPersonsByGeneration(genealogyId: string, generation: number): Person[] {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return [];
-  return Object.values(genealogy.people).filter(p => p.generation === generation);
+  const people = getPeopleForGenealogy(genealogyId);
+  return Object.values(people).filter(p => p.generation === generation);
 }
 
 export function getTreeRoots(genealogyId: string, selectedPerson: Person, minGen: number, maxGen: number): Person[] {
-  const genealogy = getGenealogy(genealogyId);
-  if (!genealogy) return [];
+  const people = getPeopleForGenealogy(genealogyId);
+  if (Object.keys(people).length === 0) return [];
 
   const chain = getAncestorChain(genealogyId, selectedPerson.id);
   const ancestorAtMinGen = chain.find(p => p.generation === minGen);
@@ -346,4 +244,24 @@ export function getTreeRoots(genealogyId: string, selectedPerson: Person, minGen
     return getPersonsByGeneration(genealogyId, minGen).filter(p => p.parentId === ancestorParentId);
   }
   return [ancestorAtMinGen];
+}
+
+export function getMaxGeneration(genealogyId: string): number {
+  const people = getPeopleForGenealogy(genealogyId);
+  if (Object.keys(people).length === 0) return 0;
+  return Math.max(...Object.values(people).map(p => p.generation));
+}
+
+export function getGenealogy(id: string): Genealogy | undefined {
+  const base = genealogies.find(g => g.id === id);
+  if (!base) return undefined;
+  
+  const people = getPeopleForGenealogy(id);
+  const ancestor = Object.values(people).find(p => !p.parentId) || Object.values(people).find(p => p.generation === 1) || base.ancestor;
+  
+  return {
+    ...base,
+    people,
+    ancestor: ancestor || base.ancestor,
+  };
 }
