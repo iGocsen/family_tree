@@ -1,5 +1,5 @@
-import { Person, Genealogy } from '@/lib/data';
-import { supabase, syncFeedbacksToCloud, syncPersonEditsToCloud, syncNewPersonsToCloud, syncCustomGenealogiesToCloud, syncAdminsToCloud, DbFeedback, DbPersonEdit, DbNewPerson, DbCustomGenealogy, DbAdmin } from './supabase';
+import { Person } from '@/lib/data';
+import { supabase, fetchCustomGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud } from './supabase';
 
 export interface FeedbackRecord {
   id: string; genealogyId: string; genealogyName: string; personId: string; personName: string;
@@ -31,22 +31,18 @@ export interface AdminUser {
   status: 'active' | 'disabled'; editableGenealogies: string[]; createdAt: string;
 }
 
-const FEEDBACKS_KEY = 'genealogy_feedbacks';
-const EDITS_KEY = 'genealogy_edits';
-const NEW_PERSONS_KEY = 'genealogy_new_persons';
-const CUSTOM_GENEALOGIES_KEY = 'genealogy_custom';
-const AUTH_KEY = 'genealogy_admin_auth';
-const ADMINS_KEY = 'genealogy_admins';
-
-// ===== Cloud Sync Flag =====
-let cloudSyncEnabled = false;
-export function enableCloudSync(enabled: boolean): void { cloudSyncEnabled = enabled; }
-export function isCloudSyncEnabled(): boolean { return cloudSyncEnabled; }
+// Cloud data caches
+let genealogiesCache: CustomGenealogy[] = [];
+let peopleCache: Record<string, Person[]> = {};
+let feedbacksCache: FeedbackRecord[] = [];
+let editsCache: PersonEdit[] = [];
+let adminsCache: AdminUser[] = [];
 
 // ===== Auth =====
+const AUTH_KEY = 'genealogy_admin_auth';
+
 export function login(username: string, password: string): boolean {
-  const admins = getAdmins();
-  const admin = admins.find(a => a.username === username && a.password === password);
+  const admin = adminsCache.find(a => a.username === username && a.password === password);
   if (admin && admin.status === 'active') {
     localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: admin.id }));
     return true;
@@ -75,76 +71,118 @@ export function getCurrentUserId(): string | null {
   try { const data = localStorage.getItem(AUTH_KEY); return data ? JSON.parse(data).userId || null : null; } catch { return null; }
 }
 
-// ===== Admin Management =====
-function getDefaultAdmins(): AdminUser[] {
-  return [{ id: 'default', username: 'admin', password: 'password', displayName: '超级管理员', role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString() }];
-}
+// ===== Data Refresh =====
+export async function refreshAllData(): Promise<void> {
+  const [genealogies, feedbacks, edits, admins] = await Promise.all([
+    fetchCustomGenealogies(),
+    fetchFeedbacks(),
+    fetchPersonEdits(),
+    fetchAdmins(),
+  ]);
 
-export function getAdmins(): AdminUser[] {
-  try {
-    const data = localStorage.getItem(ADMINS_KEY);
-    return [...getDefaultAdmins(), ...(data ? JSON.parse(data) : [])];
-  } catch { return getDefaultAdmins(); }
-}
+  genealogiesCache = genealogies.map(g => ({
+    id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
+    foundingYear: g.founding_year || '', people: {}, introductions: g.introductions || [],
+  }));
 
-export function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): AdminUser {
-  const admins = getAdmins().filter(a => a.id !== 'default');
-  const newAdmin: AdminUser = { ...admin, id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, createdAt: admin.createdAt || new Date().toISOString() };
-  const idx = admins.findIndex(a => a.id === newAdmin.id);
-  if (idx >= 0) admins[idx] = newAdmin; else admins.push(newAdmin);
-  localStorage.setItem(ADMINS_KEY, JSON.stringify(admins));
-  if (cloudSyncEnabled) {
-    syncAdminsToCloud(admins.map(a => ({ id: a.id, username: a.username, password_hash: a.password, display_name: a.displayName, bio: a.bio || null, contact: a.contact || null, role: a.role, status: a.status, editable_genealogies: a.editableGenealogies, created_at: a.createdAt })));
+  feedbacksCache = feedbacks.map(f => ({
+    id: f.id, genealogyId: f.genealogy_id, genealogyName: f.genealogy_name,
+    personId: f.person_id, personName: f.person_name, personGeneration: f.person_generation || 0,
+    personBiography: f.person_biography || '', feedbackType: f.feedback_type,
+    description: f.description, contact: f.contact || '', status: f.status,
+    adminNote: f.admin_note, createdAt: f.created_at, resolvedAt: f.resolved_at,
+  }));
+
+  editsCache = edits.map(e => ({
+    id: e.id, genealogyId: e.genealogy_id, genealogyName: e.genealogy_name,
+    personId: e.person_id, personName: e.person_name, field: e.field,
+    oldValue: e.old_value, newValue: e.new_value, status: e.status, createdAt: e.created_at,
+  }));
+
+  adminsCache = admins.map(a => ({
+    id: a.id, username: a.username, password: a.password_hash,
+    displayName: a.display_name, bio: a.bio, contact: a.contact,
+    role: a.role, status: a.status, editableGenealogies: a.editable_genealogies || [],
+    createdAt: a.created_at,
+  }));
+
+  // Add default admin if not exists
+  if (!adminsCache.find(a => a.id === 'default')) {
+    adminsCache.unshift({
+      id: 'default', username: 'admin', password: 'password', displayName: '超级管理员',
+      role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString(),
+    });
   }
-  return newAdmin;
+
+  // Fetch people for each genealogy
+  const allGenealogyIds = [...new Set([
+    ...genealogies.map((g: any) => g.id),
+    ...feedbacks.map((f: any) => f.genealogy_id),
+    ...edits.map((e: any) => e.genealogy_id),
+  ])];
+  for (const gid of allGenealogyIds) {
+    const people = await fetchPeople(gid);
+    peopleCache[gid] = people.map(p => ({
+      id: p.id, name: p.name, generation: p.generation,
+      birthYear: p.birth_year || undefined, deathYear: p.death_year || undefined,
+      gender: p.gender, spouse: p.spouse || undefined, parentId: p.parent_id || undefined,
+      biography: p.biography || '',
+      achievements: p.achievements ? p.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+    }));
+  }
 }
 
-export function deleteAdmin(id: string): void {
-  if (id === 'default') return;
-  const admins = getAdmins().filter(a => a.id !== id).filter(a => a.id !== 'default');
-  localStorage.setItem(ADMINS_KEY, JSON.stringify(admins));
-  if (cloudSyncEnabled) syncAdminsToCloud(admins.map(a => ({ id: a.id, username: a.username, password_hash: a.password, display_name: a.displayName, bio: a.bio || null, contact: a.contact || null, role: a.role, status: a.status, editable_genealogies: a.editableGenealogies, created_at: a.createdAt })));
+export async function refreshGenealogyPeople(genealogyId: string): Promise<void> {
+  const people = await fetchPeople(genealogyId);
+  peopleCache[genealogyId] = people.map(p => ({
+    id: p.id, name: p.name, generation: p.generation,
+    birthYear: p.birth_year || undefined, deathYear: p.death_year || undefined,
+    gender: p.gender, spouse: p.spouse || undefined, parentId: p.parent_id || undefined,
+    biography: p.biography || '',
+    achievements: p.achievements ? p.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+  }));
 }
 
-export function updateAdminStatus(id: string, status: 'active' | 'disabled'): void {
-  if (id === 'default') return;
-  const admins = getAdmins().filter(a => a.id !== 'default');
-  const idx = admins.findIndex(a => a.id === id);
-  if (idx >= 0) { admins[idx].status = status; localStorage.setItem(ADMINS_KEY, JSON.stringify(admins)); }
-}
-
-// ===== Custom Genealogies =====
+// ===== Genealogies =====
 export function getCustomGenealogies(): CustomGenealogy[] {
-  try { const data = localStorage.getItem(CUSTOM_GENEALOGIES_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
+  return genealogiesCache;
 }
 
-export function saveCustomGenealogy(g: CustomGenealogy): void {
-  const list = getCustomGenealogies();
-  const idx = list.findIndex(x => x.id === g.id);
-  if (idx >= 0) list[idx] = g; else list.push(g);
-  localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list));
-  if (cloudSyncEnabled) syncCustomGenealogiesToCloud(list.map(cg => ({ id: cg.id, name: cg.name, description: cg.description, origin: cg.origin, founding_year: cg.foundingYear, introductions: cg.introductions || [], created_at: new Date().toISOString() })));
+export async function saveCustomGenealogy(g: CustomGenealogy): Promise<void> {
+  const idx = genealogiesCache.findIndex(x => x.id === g.id);
+  if (idx >= 0) genealogiesCache[idx] = g; else genealogiesCache.push(g);
+  await saveGenealogyToCloud({
+    id: g.id, name: g.name, description: g.description, origin: g.origin,
+    founding_year: g.foundingYear, introductions: g.introductions || [],
+    is_base: false, created_at: new Date().toISOString(),
+  });
 }
 
-export function deleteCustomGenealogy(id: string): void {
-  const list = getCustomGenealogies().filter(g => g.id !== id);
-  localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list));
-  if (cloudSyncEnabled) syncCustomGenealogiesToCloud(list.map(cg => ({ id: cg.id, name: cg.name, description: cg.description, origin: cg.origin, founding_year: cg.foundingYear, introductions: cg.introductions || [], created_at: new Date().toISOString() })));
+export async function deleteCustomGenealogy(id: string): Promise<void> {
+  genealogiesCache = genealogiesCache.filter(g => g.id !== id);
+  await deleteGenealogyFromCloud(id);
 }
 
 export function updateCustomGenealogy(id: string, updates: Partial<CustomGenealogy>): void {
-  const list = getCustomGenealogies();
-  const idx = list.findIndex(g => g.id === id);
-  if (idx >= 0) { list[idx] = { ...list[idx], ...updates }; localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list)); }
+  const idx = genealogiesCache.findIndex(g => g.id === id);
+  if (idx >= 0) genealogiesCache[idx] = { ...genealogiesCache[idx], ...updates };
+  saveGenealogyToCloud({
+    id, name: genealogiesCache[idx]?.name || '', description: genealogiesCache[idx]?.description || '',
+    origin: genealogiesCache[idx]?.origin || '', founding_year: genealogiesCache[idx]?.foundingYear || '',
+    introductions: genealogiesCache[idx]?.introductions || [], is_base: false, created_at: new Date().toISOString(),
+  });
 }
 
 export function updateGenealogyIntroductions(id: string, introductions: string[]): void {
-  const list = getCustomGenealogies();
-  const idx = list.findIndex(g => g.id === id);
-  if (idx >= 0) { list[idx].introductions = introductions; localStorage.setItem(CUSTOM_GENEALOGIES_KEY, JSON.stringify(list)); }
+  const idx = genealogiesCache.findIndex(g => g.id === id);
+  if (idx >= 0) genealogiesCache[idx].introductions = introductions;
   const intros = getIntroductions();
   intros[id] = introductions;
   localStorage.setItem('genealogy_introductions', JSON.stringify(intros));
+  saveGenealogyToCloud({
+    id, name: genealogiesCache[idx >= 0 ? idx : 0]?.name || '', description: '', origin: '',
+    founding_year: '', introductions, is_base: false, created_at: new Date().toISOString(),
+  });
 }
 
 export function getIntroductions(): Record<string, string[]> {
@@ -155,102 +193,221 @@ export function getGenealogyIntroductions(id: string): string[] {
   return getIntroductions()[id] || [];
 }
 
-// ===== Feedback Store =====
-export function saveFeedback(feedback: Omit<FeedbackRecord, 'id' | 'status' | 'createdAt'>): FeedbackRecord {
-  const feedbacks = getFeedbacks();
+// ===== People =====
+export function getPeopleByGenealogy(genealogyId: string): Person[] {
+  return peopleCache[genealogyId] || [];
+}
+
+export async function addPersonToGenealogy(person: Person & { genealogyId: string }): Promise<void> {
+  if (!peopleCache[person.genealogyId]) peopleCache[person.genealogyId] = [];
+  peopleCache[person.genealogyId].push(person);
+  await savePersonToCloud({
+    id: person.id, genealogy_id: person.genealogyId, name: person.name, generation: person.generation,
+    birth_year: person.birthYear || '', death_year: person.deathYear || '', gender: person.gender,
+    spouse: person.spouse || '', parent_id: person.parentId || '', biography: person.biography,
+    achievements: person.achievements?.join('\n') || '', status: 'approved',
+    created_at: new Date().toISOString(),
+  });
+}
+
+export async function deletePersonFromGenealogy(genealogyId: string, personId: string): Promise<void> {
+  if (peopleCache[genealogyId]) {
+    peopleCache[genealogyId] = peopleCache[genealogyId].filter(p => p.id !== personId);
+  }
+  await deletePersonFromCloud(personId);
+}
+
+// ===== Feedbacks =====
+export function getFeedbacks(): FeedbackRecord[] {
+  return feedbacksCache;
+}
+
+export async function saveFeedback(feedback: Omit<FeedbackRecord, 'id' | 'status' | 'createdAt'>): Promise<FeedbackRecord> {
   const newFeedback: FeedbackRecord = { ...feedback, id: `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending', createdAt: new Date().toISOString() };
-  feedbacks.unshift(newFeedback);
-  localStorage.setItem(FEEDBACKS_KEY, JSON.stringify(feedbacks));
-  if (cloudSyncEnabled) syncFeedbacksToCloud(feedbacks.map(f => ({ id: f.id, genealogy_id: f.genealogyId, genealogy_name: f.genealogyName, person_id: f.personId, person_name: f.personName, person_generation: f.personGeneration, person_biography: f.personBiography, feedback_type: f.feedbackType, description: f.description, contact: f.contact, status: f.status, admin_note: f.adminNote || null, created_at: f.createdAt, resolved_at: f.resolvedAt || null })));
+  feedbacksCache.unshift(newFeedback);
+  await saveFeedbackToCloud({
+    id: newFeedback.id, genealogy_id: newFeedback.genealogyId, genealogy_name: newFeedback.genealogyName,
+    person_id: newFeedback.personId, person_name: newFeedback.personName, person_generation: newFeedback.personGeneration,
+    person_biography: newFeedback.personBiography, feedback_type: newFeedback.feedbackType,
+    description: newFeedback.description, contact: newFeedback.contact, status: newFeedback.status,
+    admin_note: newFeedback.adminNote || null, created_at: newFeedback.createdAt, resolved_at: newFeedback.resolvedAt || null,
+  });
   return newFeedback;
 }
 
-export function getFeedbacks(): FeedbackRecord[] {
-  try { const data = localStorage.getItem(FEEDBACKS_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
-}
-
-export function updateFeedbackStatus(id: string, status: 'pending' | 'resolved' | 'rejected', adminNote?: string): void {
-  const feedbacks = getFeedbacks();
-  const idx = feedbacks.findIndex(f => f.id === id);
+export async function updateFeedbackStatus(id: string, status: 'pending' | 'resolved' | 'rejected', adminNote?: string): Promise<void> {
+  const idx = feedbacksCache.findIndex(f => f.id === id);
   if (idx !== -1) {
-    feedbacks[idx].status = status;
-    feedbacks[idx].adminNote = adminNote;
-    if (status !== 'pending') feedbacks[idx].resolvedAt = new Date().toISOString();
-    localStorage.setItem(FEEDBACKS_KEY, JSON.stringify(feedbacks));
+    feedbacksCache[idx].status = status;
+    feedbacksCache[idx].adminNote = adminNote;
+    if (status !== 'pending') feedbacksCache[idx].resolvedAt = new Date().toISOString();
+    await saveFeedbackToCloud({
+      id, genealogy_id: feedbacksCache[idx].genealogyId, genealogy_name: feedbacksCache[idx].genealogyName,
+      person_id: feedbacksCache[idx].personId, person_name: feedbacksCache[idx].personName,
+      person_generation: feedbacksCache[idx].personGeneration, person_biography: feedbacksCache[idx].personBiography,
+      feedback_type: feedbacksCache[idx].feedbackType, description: feedbacksCache[idx].description,
+      contact: feedbacksCache[idx].contact, status, admin_note: adminNote || null,
+      created_at: feedbacksCache[idx].createdAt, resolved_at: feedbacksCache[idx].resolvedAt || null,
+    });
   }
 }
 
-export function deleteFeedback(id: string): void {
-  localStorage.setItem(FEEDBACKS_KEY, JSON.stringify(getFeedbacks().filter(f => f.id !== id)));
+export async function deleteFeedback(id: string): Promise<void> {
+  feedbacksCache = feedbacksCache.filter(f => f.id !== id);
+  await deleteFeedbackFromCloud(id);
 }
 
-// ===== Person Edit Store =====
-export function savePersonEdit(edit: Omit<PersonEdit, 'id' | 'status' | 'createdAt'>): PersonEdit {
-  const edits = getPersonEdits();
+// ===== Person Edits =====
+export function getPersonEdits(): PersonEdit[] {
+  return editsCache;
+}
+
+export async function savePersonEdit(edit: Omit<PersonEdit, 'id' | 'status' | 'createdAt'>): Promise<PersonEdit> {
   const newEdit: PersonEdit = { ...edit, id: `edit_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending', createdAt: new Date().toISOString() };
-  edits.unshift(newEdit);
-  localStorage.setItem(EDITS_KEY, JSON.stringify(edits));
-  if (cloudSyncEnabled) syncPersonEditsToCloud(edits.map(e => ({ id: e.id, genealogy_id: e.genealogyId, genealogy_name: e.genealogyName, person_id: e.personId, person_name: e.personName, field: e.field, old_value: e.oldValue, new_value: e.newValue, status: e.status, created_at: e.createdAt })));
+  editsCache.unshift(newEdit);
+  await saveEditToCloud({
+    id: newEdit.id, genealogy_id: newEdit.genealogyId, genealogy_name: newEdit.genealogyName,
+    person_id: newEdit.personId, person_name: newEdit.personName, field: newEdit.field,
+    old_value: newEdit.oldValue, new_value: newEdit.newValue, status: newEdit.status,
+    created_at: newEdit.createdAt,
+  });
   return newEdit;
 }
 
-export function getPersonEdits(): PersonEdit[] {
-  try { const data = localStorage.getItem(EDITS_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
+export async function updateEditStatus(id: string, status: 'pending' | 'approved' | 'rejected'): Promise<void> {
+  const idx = editsCache.findIndex(e => e.id === id);
+  if (idx !== -1) { editsCache[idx].status = status; }
+  await saveEditToCloud({
+    id, genealogy_id: editsCache[idx]?.genealogyId || '', genealogy_name: editsCache[idx]?.genealogyName || '',
+    person_id: editsCache[idx]?.personId || '', person_name: editsCache[idx]?.personName || '',
+    field: editsCache[idx]?.field || '', old_value: editsCache[idx]?.oldValue || '',
+    new_value: editsCache[idx]?.newValue || '', status, created_at: editsCache[idx]?.createdAt || '',
+  });
 }
 
-export function updateEditStatus(id: string, status: 'pending' | 'approved' | 'rejected'): void {
-  const edits = getPersonEdits();
-  const idx = edits.findIndex(e => e.id === id);
-  if (idx !== -1) { edits[idx].status = status; localStorage.setItem(EDITS_KEY, JSON.stringify(edits)); }
+export async function modifyEdit(id: string, updates: Partial<PersonEdit>): Promise<void> {
+  const idx = editsCache.findIndex(e => e.id === id);
+  if (idx !== -1) { editsCache[idx] = { ...editsCache[idx], ...updates }; }
+  await saveEditToCloud({
+    id, genealogy_id: editsCache[idx]?.genealogyId || '', genealogy_name: editsCache[idx]?.genealogyName || '',
+    person_id: editsCache[idx]?.personId || '', person_name: editsCache[idx]?.personName || '',
+    field: editsCache[idx]?.field || '', old_value: editsCache[idx]?.oldValue || '',
+    new_value: editsCache[idx]?.newValue || '', status: editsCache[idx]?.status || '',
+    created_at: editsCache[idx]?.createdAt || '',
+  });
 }
 
-export function modifyEdit(id: string, updates: Partial<PersonEdit>): void {
-  const edits = getPersonEdits();
-  const idx = edits.findIndex(e => e.id === id);
-  if (idx !== -1) { edits[idx] = { ...edits[idx], ...updates }; localStorage.setItem(EDITS_KEY, JSON.stringify(edits)); }
+export async function deleteEdit(id: string): Promise<void> {
+  editsCache = editsCache.filter(e => e.id !== id);
+  await deleteEditFromCloud(id);
 }
 
-export function deleteEdit(id: string): void {
-  localStorage.setItem(EDITS_KEY, JSON.stringify(getPersonEdits().filter(e => e.id !== id)));
+// ===== New Persons (Pending) =====
+// New persons are stored as people with status='pending'
+export function getNewPersons(): (NewPersonData & { id: string; status: string; createdAt: string })[] {
+  const result: (NewPersonData & { id: string; status: string; createdAt: string })[] = [];
+  for (const [gid, people] of Object.entries(peopleCache)) {
+    for (const p of people) {
+      if ((p as any).status === 'pending') {
+        result.push({
+          id: p.id, genealogyId: gid, name: p.name, generation: p.generation,
+          birthYear: p.birthYear || '', deathYear: p.deathYear || '',
+          gender: p.gender, spouse: p.spouse || '', parentId: p.parentId || '',
+          biography: p.biography, achievements: p.achievements?.join('\n') || '',
+          status: 'pending', createdAt: (p as any).createdAt || '',
+        });
+      }
+    }
+  }
+  return result;
 }
 
-// ===== New Person Store =====
-export function saveNewPerson(data: Omit<NewPersonData, 'id'> & { id?: string }): NewPersonData & { id: string; status: string; createdAt: string } {
-  const persons = getNewPersons();
+export async function saveNewPerson(data: Omit<NewPersonData, 'id'> & { id?: string }): Promise<NewPersonData & { id: string; status: string; createdAt: string }> {
   const newPerson = { ...data, id: data.id || `new_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, status: 'pending', createdAt: new Date().toISOString() };
-  persons.unshift(newPerson);
-  localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons));
-  if (cloudSyncEnabled) syncNewPersonsToCloud(persons.map(p => ({ id: p.id, genealogy_id: p.genealogyId, name: p.name, generation: p.generation, birth_year: p.birthYear, death_year: p.deathYear, gender: p.gender, spouse: p.spouse, parent_id: p.parentId, biography: p.biography, achievements: p.achievements, status: p.status, created_at: p.createdAt, approved_at: (p as any).approvedAt || null })));
+  const person: Person = {
+    id: newPerson.id, name: newPerson.name, generation: newPerson.generation,
+    birthYear: newPerson.birthYear || undefined, deathYear: newPerson.deathYear || undefined,
+    gender: newPerson.gender, spouse: newPerson.spouse || undefined, parentId: newPerson.parentId || undefined,
+    biography: newPerson.biography,
+    achievements: newPerson.achievements ? newPerson.achievements.split('\n').filter(a => a.trim()) : undefined,
+  };
+  if (!peopleCache[newPerson.genealogyId]) peopleCache[newPerson.genealogyId] = [];
+  (person as any).status = 'pending';
+  (person as any).createdAt = newPerson.createdAt;
+  peopleCache[newPerson.genealogyId].push(person);
+  await savePersonToCloud({
+    id: newPerson.id, genealogy_id: newPerson.genealogyId, name: newPerson.name, generation: newPerson.generation,
+    birth_year: newPerson.birthYear, death_year: newPerson.deathYear, gender: newPerson.gender,
+    spouse: newPerson.spouse, parent_id: newPerson.parentId, biography: newPerson.biography,
+    achievements: newPerson.achievements, status: 'pending', created_at: newPerson.createdAt,
+  });
   return newPerson;
 }
 
-export function getNewPersons(): (NewPersonData & { id: string; status: string; createdAt: string })[] {
-  try { const data = localStorage.getItem(NEW_PERSONS_KEY); return data ? JSON.parse(data) : []; } catch { return []; }
-}
-
-export function updateNewPersonStatus(id: string, status: string): void {
-  const persons = getNewPersons();
-  const idx = persons.findIndex(p => p.id === id);
-  if (idx !== -1) {
-    persons[idx].status = status;
-    if (status === 'approved') (persons[idx] as any).approvedAt = new Date().toISOString();
-    localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons));
+export async function updateNewPersonStatus(id: string, status: string): Promise<void> {
+  for (const [gid, people] of Object.entries(peopleCache)) {
+    const idx = people.findIndex(p => p.id === id);
+    if (idx !== -1) {
+      (people[idx] as any).status = status;
+      if (status === 'approved') (people[idx] as any).approvedAt = new Date().toISOString();
+      await savePersonToCloud({
+        id: people[idx].id, genealogy_id: gid, name: people[idx].name, generation: people[idx].generation,
+        birth_year: people[idx].birthYear || '', death_year: people[idx].deathYear || '', gender: people[idx].gender,
+        spouse: people[idx].spouse || '', parent_id: people[idx].parentId || '', biography: people[idx].biography,
+        achievements: people[idx].achievements?.join('\n') || '', status,
+        created_at: (people[idx] as any).createdAt || new Date().toISOString(),
+      });
+      break;
+    }
   }
 }
 
-export function modifyNewPerson(id: string, updates: Partial<NewPersonData>): void {
-  const persons = getNewPersons();
-  const idx = persons.findIndex(p => p.id === id);
-  if (idx !== -1) { persons[idx] = { ...persons[idx], ...updates }; localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(persons)); }
+export async function modifyNewPerson(id: string, updates: Partial<NewPersonData>): Promise<void> {
+  for (const [gid, people] of Object.entries(peopleCache)) {
+    const idx = people.findIndex(p => p.id === id);
+    if (idx !== -1) {
+      if (updates.name) people[idx].name = updates.name;
+      if (updates.generation) people[idx].generation = updates.generation;
+      if (updates.birthYear) people[idx].birthYear = updates.birthYear;
+      if (updates.deathYear) people[idx].deathYear = updates.deathYear;
+      if (updates.gender) people[idx].gender = updates.gender;
+      if (updates.spouse !== undefined) people[idx].spouse = updates.spouse;
+      if (updates.parentId !== undefined) people[idx].parentId = updates.parentId;
+      if (updates.biography !== undefined) people[idx].biography = updates.biography;
+      if (updates.achievements !== undefined) people[idx].achievements = updates.achievements ? updates.achievements.split('\n').filter(a => a.trim()) : undefined;
+      await savePersonToCloud({
+        id: people[idx].id, genealogy_id: gid, name: people[idx].name, generation: people[idx].generation,
+        birth_year: people[idx].birthYear || '', death_year: people[idx].deathYear || '', gender: people[idx].gender,
+        spouse: people[idx].spouse || '', parent_id: people[idx].parentId || '', biography: people[idx].biography,
+        achievements: people[idx].achievements?.join('\n') || '', status: (people[idx] as any).status || 'pending',
+        created_at: (people[idx] as any).createdAt || new Date().toISOString(),
+      });
+      break;
+    }
+  }
 }
 
-export function deleteNewPerson(id: string): void {
-  localStorage.setItem(NEW_PERSONS_KEY, JSON.stringify(getNewPersons().filter(p => p.id !== id)));
+export async function deleteNewPerson(id: string): Promise<void> {
+  for (const [gid, people] of Object.entries(peopleCache)) {
+    const idx = people.findIndex(p => p.id === id);
+    if (idx !== -1) {
+      people.splice(idx, 1);
+      await deletePersonFromCloud(id);
+      break;
+    }
+  }
 }
 
 // ===== Helpers =====
 export function getApprovedPersonsByGenealogy(genealogyId: string): (NewPersonData & { id: string; status: string; createdAt: string })[] {
-  return getNewPersons().filter(p => p.genealogyId === genealogyId && p.status === 'approved');
+  const people = peopleCache[genealogyId] || [];
+  return people.filter(p => (p as any).status === 'approved').map(p => ({
+    id: p.id, genealogyId, name: p.name, generation: p.generation,
+    birthYear: p.birthYear || '', deathYear: p.deathYear || '',
+    gender: p.gender, spouse: p.spouse || '', parentId: p.parentId || '',
+    biography: p.biography, achievements: p.achievements?.join('\n') || '',
+    status: 'approved', createdAt: (p as any).createdAt || '',
+  }));
 }
 
 export function getStats() {
@@ -262,4 +419,45 @@ export function getStats() {
     edits: { total: edits.length, pending: edits.filter(e => e.status === 'pending').length, approved: edits.filter(e => e.status === 'approved').length, rejected: edits.filter(e => e.status === 'rejected').length },
     newPersons: { total: newPersons.length, pending: newPersons.filter(p => p.status === 'pending').length, approved: newPersons.filter(p => p.status === 'approved').length },
   };
+}
+
+// ===== Admin Management =====
+function getDefaultAdmins(): AdminUser[] {
+  return [{ id: 'default', username: 'admin', password: 'password', displayName: '超级管理员', role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString() }];
+}
+
+export function getAdmins(): AdminUser[] {
+  return [...getDefaultAdmins(), ...adminsCache.filter(a => a.id !== 'default')];
+}
+
+export async function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<AdminUser> {
+  const newAdmin: AdminUser = { ...admin, id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, createdAt: admin.createdAt || new Date().toISOString() };
+  const idx = adminsCache.findIndex(a => a.id === newAdmin.id);
+  if (idx >= 0) adminsCache[idx] = newAdmin; else adminsCache.push(newAdmin);
+  await saveAdminToCloud({
+    id: newAdmin.id, username: newAdmin.username, password_hash: newAdmin.password,
+    display_name: newAdmin.displayName, bio: newAdmin.bio || null, contact: newAdmin.contact || null,
+    role: newAdmin.role, status: newAdmin.status, editable_genealogies: newAdmin.editableGenealogies,
+    created_at: newAdmin.createdAt,
+  });
+  return newAdmin;
+}
+
+export async function deleteAdmin(id: string): Promise<void> {
+  if (id === 'default') return;
+  adminsCache = adminsCache.filter(a => a.id !== id);
+  await deleteAdminFromCloud(id);
+}
+
+export async function updateAdminStatus(id: string, status: 'active' | 'disabled'): Promise<void> {
+  if (id === 'default') return;
+  const idx = adminsCache.findIndex(a => a.id === id);
+  if (idx >= 0) { adminsCache[idx].status = status; }
+  await saveAdminToCloud({
+    id, username: adminsCache[idx]?.username || '', password_hash: adminsCache[idx]?.password || '',
+    display_name: adminsCache[idx]?.displayName || '', bio: adminsCache[idx]?.bio || null,
+    contact: adminsCache[idx]?.contact || null, role: adminsCache[idx]?.role || 'admin',
+    status, editable_genealogies: adminsCache[idx]?.editableGenealogies || [],
+    created_at: adminsCache[idx]?.createdAt || '',
+  });
 }

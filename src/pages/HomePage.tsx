@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { genealogies, getMaxGeneration } from '@/lib/data';
+import { genealogies, getMaxGeneration, getGenealogy } from '@/lib/data';
 import { getCustomGenealogies } from '@/lib/store';
 import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText, Search } from 'lucide-react';
 
@@ -15,15 +15,22 @@ export default function HomePage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Combine base + custom genealogies (no "自定义" tag)
+  // Combine base + custom genealogies
   const allGenealogies = useMemo(() => {
     const base = genealogies.map(g => ({ ...g }));
-    const custom = customGenealogies.map(cg => ({
-      id: cg.id, name: cg.name, description: cg.description, origin: cg.origin,
-      foundingYear: cg.foundingYear,
-      ancestor: Object.values(cg.people).find(p => p.generation === 1),
-      people: cg.people,
-    }));
+    const custom = customGenealogies.map(cg => {
+      // Get merged genealogy to get ancestor and people
+      const merged = getGenealogy(cg.id);
+      return {
+        id: cg.id,
+        name: cg.name,
+        description: cg.description,
+        origin: cg.origin,
+        foundingYear: cg.foundingYear,
+        ancestor: merged?.ancestor || Object.values(cg.people).find(p => p.generation === 1),
+        people: cg.people,
+      };
+    });
     return [...base, ...custom];
   }, [customGenealogies]);
 

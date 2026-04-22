@@ -159,7 +159,7 @@ const chenPeople = buildPeople([
   { id: 'chen-9h', name: '陈建金', generation: 9, birthYear: '1948', deathYear: '2028', gender: 'male', biography: '九世，字金融。金融学家，曾任证监会副主席。', achievements: ['证监会副主席'], parentId: 'chen-8g' },
 ]);
 
-// Base genealogies for HomePage display
+// Base genealogies
 export const genealogies: Genealogy[] = [
   { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', foundingYear: '1680', ancestor: liPeople['li-1'], people: liPeople },
   { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', foundingYear: '1690', ancestor: zhangPeople['zhang-1'], people: zhangPeople },
@@ -170,8 +170,24 @@ export const genealogies: Genealogy[] = [
 let mergedCache: Record<string, { genealogy: Genealogy; timestamp: number }> = {};
 
 /**
+ * Get all genealogy IDs (base + custom)
+ */
+export function getAllGenealogyIds(): string[] {
+  const baseIds = genealogies.map(g => g.id);
+  try {
+    const data = localStorage.getItem('genealogy_custom');
+    if (data) {
+      const customs = JSON.parse(data);
+      const customIds = customs.map((g: any) => g.id).filter((id: string) => !baseIds.includes(id));
+      return [...baseIds, ...customIds];
+    }
+  } catch { /* ignore */ }
+  return baseIds;
+}
+
+/**
  * Get genealogy with approved new persons merged in.
- * Also merges custom genealogy data (name, description, etc.) if overridden.
+ * Also handles custom genealogies that were created from scratch.
  */
 export function getGenealogy(id: string): Genealogy | undefined {
   const base = genealogies.find(g => g.id === id);
@@ -197,7 +213,6 @@ export function getGenealogy(id: string): Genealogy | undefined {
   let description = base?.description || customOverride?.description || '';
   let origin = base?.origin || customOverride?.origin || '';
   let foundingYear = base?.foundingYear || customOverride?.foundingYear || '';
-  let ancestor = base?.ancestor || Object.values(people).find(p => p.generation === 1);
 
   // Apply custom genealogy overrides for name/description
   if (customOverride) {
@@ -207,7 +222,7 @@ export function getGenealogy(id: string): Genealogy | undefined {
     if (customOverride.foundingYear) foundingYear = customOverride.foundingYear;
   }
 
-  // Merge approved new persons
+  // Merge approved new persons for this genealogy
   let approvedPersons: any[] = [];
   try {
     const data = localStorage.getItem('genealogy_new_persons');
@@ -225,6 +240,9 @@ export function getGenealogy(id: string): Genealogy | undefined {
     people[ap.id] = person;
   }
 
+  // Find ancestor: first person with no parentId (could be any generation)
+  let ancestor = Object.values(people).find(p => !p.parentId);
+  // Fallback to gen 1
   if (!ancestor) ancestor = Object.values(people).find(p => p.generation === 1);
 
   const merged: Genealogy = { id, name, description, origin, foundingYear, ancestor: ancestor!, people };
@@ -245,6 +263,19 @@ export function getMaxGeneration(genealogyId: string): number {
   return maxGen;
 }
 
+/**
+ * Get min generation for a genealogy
+ */
+export function getMinGeneration(genealogyId: string): number {
+  const genealogy = getGenealogy(genealogyId);
+  if (!genealogy) return 1;
+  let minGen = Infinity;
+  for (const p of Object.values(genealogy.people)) {
+    if (p.generation < minGen) minGen = p.generation;
+  }
+  return minGen === Infinity ? 1 : minGen;
+}
+
 export function searchPerson(genealogyId: string, query: string): Person[] {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return [];
@@ -261,7 +292,7 @@ export function getPerson(genealogyId: string, personId: string): Person | undef
 export function getRootPerson(genealogyId: string): Person | undefined {
   const genealogy = getGenealogy(genealogyId);
   if (!genealogy) return undefined;
-  return Object.values(genealogy.people).find(p => p.generation === 1);
+  return Object.values(genealogy.people).find(p => !p.parentId) || Object.values(genealogy.people).find(p => p.generation === 1);
 }
 
 export function getChildren(genealogyId: string, parentId: string): Person[] {
