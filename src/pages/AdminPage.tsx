@@ -9,10 +9,10 @@ import {
   getCustomGenealogies, saveCustomGenealogy, deleteCustomGenealogy, updateCustomGenealogy,
   getApprovedPersonsByGenealogy, getGenealogyIntroductions, updateGenealogyIntroductions,
   getAdmins, saveAdmin, deleteAdmin, updateAdminStatus,
-  migrateToSupabase, refreshAllData,
+  migrateToSupabase, refreshAllData, getPeopleByGenealogy,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
-import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
+import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration, Person } from '@/lib/data';
 import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
@@ -20,7 +20,7 @@ import {
   FileText, KeyRound, UserCog, Shield, ShieldOff, Cloud,
 } from 'lucide-react';
 
-type TabType = 'dashboard' | 'feedbacks' | 'edits' | 'new-persons' | 'genealogies' | 'admins';
+type TabType = 'dashboard' | 'feedbacks' | 'edits' | 'new-persons' | 'all-persons' | 'genealogies' | 'admins';
 
 // ===== Login Page =====
 function LoginPage() {
@@ -79,6 +79,7 @@ function AdminPageInner() {
   const [feedbacks, setFeedbacks] = useState<FeedbackRecord[]>(getFeedbacks());
   const [edits, setEdits] = useState<PersonEdit[]>(getPersonEdits());
   const [newPersons, setNewPersons] = useState(getNewPersons());
+  const [allPersons, setAllPersons] = useState<Record<string, Person[]>>({});
   const [stats, setStats] = useState(getStats());
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackRecord | null>(null);
   const [adminNote, setAdminNote] = useState('');
@@ -92,6 +93,13 @@ function AdminPageInner() {
       setNewPersons(getNewPersons());
       setStats(getStats());
       setAdmins(getAdmins());
+      // Load all people from all genealogies
+      const genealogies = getSupabaseGenealogies();
+      const personsMap: Record<string, Person[]> = {};
+      for (const g of genealogies) {
+        personsMap[g.id] = getPeopleByGenealogy(g.id);
+      }
+      setAllPersons(personsMap);
       setIsLoaded(true);
     }).catch(() => setIsLoaded(true));
   }, []);
@@ -156,6 +164,13 @@ function AdminPageInner() {
     setNewPersons(getNewPersons());
     setStats(getStats());
     setAdmins(getAdmins());
+    // Refresh all people
+    const genealogies = getSupabaseGenealogies();
+    const personsMap: Record<string, Person[]> = {};
+    for (const g of genealogies) {
+      personsMap[g.id] = getPeopleByGenealogy(g.id);
+    }
+    setAllPersons(personsMap);
   };
 
   const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
@@ -264,6 +279,7 @@ function AdminPageInner() {
     { key: 'feedbacks', label: '反馈管理', icon: <MessageSquare className="w-4 h-4" />, count: stats.feedbacks.pending },
     { key: 'edits', label: '修改审核', icon: <Edit3 className="w-4 h-4" />, count: stats.edits.pending },
     { key: 'new-persons', label: '新增人物', icon: <UserPlus className="w-4 h-4" />, count: stats.newPersons.pending },
+    { key: 'all-persons', label: '人物管理', icon: <User className="w-4 h-4" /> },
     { key: 'genealogies', label: '族谱管理', icon: <Plus className="w-4 h-4" /> },
     { key: 'admins', label: '管理员', icon: <UserCog className="w-4 h-4" /> },
   ];
@@ -647,6 +663,69 @@ function AdminPageInner() {
           </div>
         )}
 
+        {/* ===== All Persons Management ===== */}
+        {activeTab === 'all-persons' && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-foreground">人物管理</h3>
+              <div className="flex items-center gap-4">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="搜索人物..." className="w-full pl-10 pr-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all" />
+                </div>
+                <div className="relative">
+                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="pl-10 pr-8 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground appearance-none focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all">
+                    <option value="all">全部状态</option>
+                    <option value="approved">已审核</option>
+                    <option value="pending">待审核</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {Object.keys(allPersons).length === 0 ? (
+              <div className="bg-card border border-border rounded-xl p-12 text-center"><User className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" /><p className="text-muted-foreground">暂无人物数据</p></div>
+            ) : (
+              <div className="space-y-6">
+                {Object.entries(allPersons).map(([genealogyId, persons]) => {
+                  const genealogy = getSupabaseGenealogies().find(g => g.id === genealogyId);
+                  const filteredPersons = persons.filter(p => {
+                    const matchSearch = !searchTerm || p.name.toLowerCase().includes(searchTerm.toLowerCase());
+                    const matchStatus = statusFilter === 'all' || (p as any).status === statusFilter || (statusFilter === 'approved' && !(p as any).status);
+                    return matchSearch && matchStatus;
+                  });
+                  if (filteredPersons.length === 0) return null;
+                  return (
+                    <div key={genealogyId} className="bg-card border border-border rounded-xl overflow-hidden">
+                      <div className="px-6 py-4 border-b border-border bg-secondary/30">
+                        <h3 className="text-lg font-semibold text-foreground">{genealogy?.name || genealogyId}（{filteredPersons.length} 人）</h3>
+                      </div>
+                      <div className="divide-y divide-border">
+                        {filteredPersons.sort((a, b) => a.generation - b.generation).map(p => (
+                          <div key={p.id} className="px-6 py-3 flex items-center justify-between hover:bg-secondary/30 transition-colors">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${p.gender === 'male' ? 'bg-primary/10 text-primary' : 'bg-accent/10 text-accent'}`}>{p.name.charAt(0)}</div>
+                              <div>
+                                <div className="text-sm font-medium text-foreground">{p.name}</div>
+                                <div className="text-xs text-muted-foreground">第{p.generation}世{p.birthYear ? ` · ${p.birthYear}-${p.deathYear || '？'}` : ''}</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {(p as any).status === 'pending' && <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">待审核</span>}
+                              {p.parentId && <span className="text-xs text-muted-foreground">父ID: {p.parentId}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ===== Genealogies Management ===== */}
         {activeTab === 'genealogies' && (
           <div className="space-y-6 animate-fade-in">
@@ -682,7 +761,6 @@ function AdminPageInner() {
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="text-lg font-semibold text-foreground">{g.name}</h4>
-                          {hasCustom && <span className="text-xs px-2 py-0.5 bg-accent/10 text-accent rounded-full">已编辑</span>}
                         </div>
                         <p className="text-sm text-muted-foreground mb-2">{g.description}</p>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground">
