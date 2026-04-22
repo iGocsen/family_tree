@@ -112,6 +112,7 @@ export async function refreshAllData(): Promise<void> {
       gender: p.gender, spouse: p.spouse || undefined, parentId: p.parent_id || undefined,
       biography: p.biography || '',
       achievements: p.achievements ? p.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
+      status: p.status || 'approved',
     };
     
     peopleCache[p.genealogy_id].push(person);

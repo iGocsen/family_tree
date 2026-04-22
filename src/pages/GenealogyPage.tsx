@@ -266,31 +266,41 @@ export default function GenealogyPage() {
               </div>
 
               {/* Generation indicator */}
-              {selectedPerson && (
-                <div className="px-6 py-2 bg-secondary/30 border-b border-border flex items-center gap-2 overflow-x-auto">
-                  {Array.from({ length: 15 }, (_, i) => i + 1).map(gen => {
-                    const isActive = gen === selectedPerson.generation;
-                    const isInRange = gen >= visibleRange.minGen && gen <= visibleRange.maxGen;
-                    return (
-                      <button
-                        key={gen}
-                        onClick={() => {
-                          const chain = getAncestorChainForPerson(selectedPerson);
-                          const personAtGen = chain.find(p => p.generation === gen);
-                          if (personAtGen) handleSelectPerson(personAtGen);
-                        }}
-                        className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
-                          isActive ? 'bg-primary text-primary-foreground shadow-md cursor-pointer'
-                            : isInRange ? 'bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer'
-                            : 'text-muted-foreground/40 cursor-default'
-                        }`}
-                      >
-                        {gen}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+              {selectedPerson && (() => {
+                // Dynamically compute actual min/max generations from people data
+                const allGens = Object.values(people).map(p => p.generation);
+                const actualMinGen = allGens.length > 0 ? Math.min(...allGens) : 1;
+                const actualMaxGen = allGens.length > 0 ? Math.max(...allGens) : 15;
+                const displayMinGen = Math.max(actualMinGen, visibleRange.minGen - 2);
+                const displayMaxGen = Math.min(actualMaxGen, visibleRange.maxGen + 2);
+                const generations = Array.from({ length: displayMaxGen - displayMinGen + 1 }, (_, i) => displayMinGen + i);
+
+                return (
+                  <div className="px-6 py-2 bg-secondary/30 border-b border-border flex items-center gap-2 overflow-x-auto">
+                    {generations.map(gen => {
+                      const isActive = gen === selectedPerson.generation;
+                      const isInRange = gen >= visibleRange.minGen && gen <= visibleRange.maxGen;
+                      return (
+                        <button
+                          key={gen}
+                          onClick={() => {
+                            const chain = getAncestorChainForPerson(selectedPerson);
+                            const personAtGen = chain.find(p => p.generation === gen);
+                            if (personAtGen) handleSelectPerson(personAtGen);
+                          }}
+                          className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-all ${
+                            isActive ? 'bg-primary text-primary-foreground shadow-md cursor-pointer'
+                              : isInRange ? 'bg-secondary text-secondary-foreground hover:bg-secondary/80 cursor-pointer'
+                              : 'text-muted-foreground/40 cursor-default'
+                          }`}
+                        >
+                          {gen}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
 
               <div className="p-6 overflow-x-auto">
                 {treeRoots.length > 0 ? (

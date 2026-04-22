@@ -2,6 +2,7 @@ export interface Person {
   id: string; name: string; generation: number; birthYear?: string; deathYear?: string;
   gender: 'male' | 'female'; spouse?: string; children?: string[]; parentId?: string;
   biography: string; achievements?: string[]; notes?: string;
+  status?: string; // 用于标识审核状态：'approved' | 'pending'
 }
 
 export interface Genealogy {

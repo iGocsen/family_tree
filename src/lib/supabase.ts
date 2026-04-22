@@ -91,6 +91,41 @@ export async function deletePersonFromCloud(id: string): Promise<void> {
   if (error) console.error('Failed to delete person:', error);
 }
 
+// ===== Person Additions (person_add table) =====
+export async function fetchPersonAdditions(): Promise<any[]> {
+  const { data, error } = await supabase.from('person_add').select('*').order('created_at', { ascending: false });
+  if (error) { console.error('Failed to fetch person additions:', error); return []; }
+  return data || [];
+}
+
+export async function savePersonAddition(p: any): Promise<void> {
+  const { error } = await supabase.from('person_add').upsert({
+    id: p.id, genealogy_id: p.genealogy_id, name: p.name, generation: p.generation,
+    birth_year: p.birth_year || '', death_year: p.death_year || '', gender: p.gender || 'male',
+    spouse: p.spouse || '', parent_id: p.parent_id || '', biography: p.biography || '',
+    achievements: p.achievements || '', status: p.status || 'pending',
+    created_at: p.created_at || new Date().toISOString(),
+  }, { onConflict: 'id' });
+  if (error) console.error('Failed to save person addition:', error);
+}
+
+export async function approvePersonAddition(id: string, personData: any): Promise<void> {
+  // Insert into people table
+  await supabase.from('people').insert({
+    id: personData.id, genealogy_id: personData.genealogy_id, name: personData.name, generation: personData.generation,
+    birth_year: personData.birth_year || '', death_year: personData.death_year || '', gender: personData.gender || 'male',
+    spouse: personData.spouse || '', parent_id: personData.parent_id || '', biography: personData.biography || '',
+    achievements: personData.achievements || '', status: 'approved',
+    created_at: new Date().toISOString(),
+  });
+  // Delete from person_add table
+  await supabase.from('person_add').delete().eq('id', id);
+}
+
+export async function rejectPersonAddition(id: string): Promise<void> {
+  await supabase.from('person_add').delete().eq('id', id);
+}
+
 // ===== Feedbacks =====
 export async function fetchFeedbacks(): Promise<any[]> {
   const { data, error } = await supabase.from('feedbacks').select('*').order('created_at', { ascending: false });

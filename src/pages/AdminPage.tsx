@@ -13,7 +13,7 @@ import {
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
 import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration, Person } from '@/lib/data';
-import { savePersonToCloud } from '@/lib/supabase';
+import { savePersonToCloud, deletePersonFromCloud } from '@/lib/supabase';
 import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
@@ -183,13 +183,18 @@ function AdminPageInner() {
     setAllGenealogies(getSupabaseGenealogies());
   };
 
-  const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
-    updateFeedbackStatus(id, action, adminNote);
-    setAdminNote(''); setShowFeedbackDetail(false); setSelectedFeedback(null); refreshData();
+  const handleFeedbackAction = async (id: string, action: 'resolved' | 'rejected') => {
+    await updateFeedbackStatus(id, action, adminNote);
+    setAdminNote(''); setShowFeedbackDetail(false); setSelectedFeedback(null);
+    // Update local state immediately
+    setFeedbacks(prev => prev.map(f => f.id === id ? { ...f, status: action, resolvedAt: new Date().toISOString() } : f));
+    await refreshData();
   };
   const handleDeleteFeedback = (id: string) => {
-    confirmAction('删除反馈', '确定要删除此反馈记录吗？此操作不可恢复。', () => {
-      deleteFeedback(id); refreshData();
+    confirmAction('删除反馈', '确定要删除此反馈记录吗？此操作不可恢复。', async () => {
+      // Update local state immediately
+      setFeedbacks(prev => prev.filter(f => f.id !== id));
+      await deleteFeedback(id); await refreshData();
     });
   };
   const handleEditAction = async (id: string, action: 'approved' | 'rejected') => {
@@ -197,12 +202,10 @@ function AdminPageInner() {
     if (action === 'approved') {
       const edit = edits.find(e => e.id === id);
       if (edit) {
-        // Update the person in the Supabase people table
         const genealogy = getGenealogy(edit.genealogyId);
         if (genealogy) {
           const person = genealogy.people[edit.personId];
           if (person) {
-            // Apply the edit to the person
             const updatedPerson = { ...person };
             if (edit.field === 'name') updatedPerson.name = edit.newValue;
             else if (edit.field === 'birthYear') updatedPerson.birthYear = edit.newValue;
@@ -211,7 +214,6 @@ function AdminPageInner() {
             else if (edit.field === 'spouse') updatedPerson.spouse = edit.newValue;
             else if (edit.field === 'achievements') updatedPerson.achievements = edit.newValue.split('\n').filter((a: string) => a.trim());
 
-            // Save to Supabase
             await savePersonToCloud({
               id: person.id, genealogy_id: edit.genealogyId, name: updatedPerson.name, generation: updatedPerson.generation,
               birth_year: updatedPerson.birthYear || '', death_year: updatedPerson.deathYear || '', gender: updatedPerson.gender,
@@ -223,15 +225,24 @@ function AdminPageInner() {
         }
       }
     }
-    updateEditStatus(id, action);
+    await updateEditStatus(id, action);
+    // Update local state immediately
+    setEdits(prev => prev.map(e => e.id === id ? { ...e, status: action } : e));
     await refreshData();
   };
   const handleDeleteEdit = (id: string) => {
-    confirmAction('删除修改记录', '确定要删除此修改记录吗？此操作不可恢复。', () => {
-      deleteEdit(id); refreshData();
+    confirmAction('删除修改记录', '确定要删除此修改记录吗？此操作不可恢复。', async () => {
+      // Update local state immediately
+      setEdits(prev => prev.filter(e => e.id !== id));
+      await deleteEdit(id); await refreshData();
     });
   };
-  const handleNewPersonAction = (id: string, action: string) => { updateNewPersonStatus(id, action); refreshData(); };
+  const handleNewPersonAction = async (id: string, action: string) => {
+    await updateNewPersonStatus(id, action);
+    // Update local state immediately
+    setNewPersons(prev => prev.map(p => p.id === id ? { ...p, status: action } : p));
+    await refreshData();
+  };
   const handleDeleteNewPerson = (id: string) => {
     confirmAction('删除人物', '确定要删除此人物记录吗？此操作不可恢复。', () => {
       deleteNewPerson(id); refreshData();
@@ -243,7 +254,7 @@ function AdminPageInner() {
     setEditingPersonId(person.id); setShowNewPersonForm(true); setFormErrors({});
   };
 
-  const handleSubmitNewPerson = (e: React.FormEvent) => {
+  const handleSubmitNewPerson = async (e: React.FormEvent) => {
     e.preventDefault();
     const errors: Record<string, string> = {};
     if (!newPersonForm.genealogyId) errors.genealogyId = '请选择族谱';
@@ -265,20 +276,40 @@ function AdminPageInner() {
       if (age < 0) errors.deathYear = '逝世年份不能早于出生年份';
     }
     if (Object.keys(errors).length > 0) { setFormErrors(errors); return; }
-    if (editingPersonId) { modifyNewPerson(editingPersonId, { ...newPersonForm }); setEditingPersonId(null); }
-    else { saveNewPerson({ ...newPersonForm }); }
+    if (editingPersonId) {
+      await modifyNewPerson(editingPersonId, { ...newPersonForm });
+      setEditingPersonId(null);
+    } else {
+      await saveNewPerson({ ...newPersonForm });
+    }
+    // Update local state immediately
+    const newPerson = {
+      ...newPersonForm,
+      id: editingPersonId || `new_${Date.now()}`,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    if (editingPersonId) {
+      setNewPersons(prev => prev.map(p => p.id === editingPersonId ? { ...p, ...newPersonForm } : p));
+    } else {
+      setNewPersons(prev => [newPerson, ...prev]);
+    }
     setNewPersonForm({ genealogyId: '', name: '', generation: 1, birthYear: '', deathYear: '', gender: 'male', spouse: '', parentId: '', biography: '', achievements: '' });
-    setShowNewPersonForm(false); setEditingPersonId(null); setFormErrors({}); refreshData();
+    setShowNewPersonForm(false); setEditingPersonId(null); setFormErrors({});
+    await refreshData();
   };
 
-  const handleSubmitEdit = (e: React.FormEvent) => {
+  const handleSubmitEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editForm.genealogyId || !editForm.personId || !editForm.newValue) return;
     const genealogy = getGenealogy(editForm.genealogyId);
     const person = genealogy?.people[editForm.personId];
-    savePersonEdit({ genealogyId: editForm.genealogyId, genealogyName: genealogy?.name || '', personId: editForm.personId, personName: person?.name || '', field: editForm.field, oldValue: editForm.oldValue, newValue: editForm.newValue });
+    const newEdit = await savePersonEdit({ genealogyId: editForm.genealogyId, genealogyName: genealogy?.name || '', personId: editForm.personId, personName: person?.name || '', field: editForm.field, oldValue: editForm.oldValue, newValue: editForm.newValue });
+    // Update local state immediately
+    setEdits(prev => [newEdit, ...prev]);
     setEditForm({ genealogyId: '', personId: '', field: 'biography', oldValue: '', newValue: '' });
-    setShowEditForm(false); setEditingEditId(null); refreshData();
+    setShowEditForm(false); setEditingEditId(null);
+    await refreshData();
   };
 
   const handleModifyEdit = (edit: PersonEdit) => {
@@ -286,12 +317,15 @@ function AdminPageInner() {
     setEditingEditId(edit.id); setShowEditForm(true);
   };
 
-  const handleSaveEditModification = (e: React.FormEvent) => {
+  const handleSaveEditModification = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingEditId) return;
-    modifyEdit(editingEditId, { ...editForm });
+    await modifyEdit(editingEditId, { ...editForm });
+    // Update local state immediately
+    setEdits(prev => prev.map(e => e.id === editingEditId ? { ...e, ...editForm } : e));
     setEditForm({ genealogyId: '', personId: '', field: 'biography', oldValue: '', newValue: '' });
-    setShowEditForm(false); setEditingEditId(null); refreshData();
+    setShowEditForm(false); setEditingEditId(null);
+    await refreshData();
   };
 
   const handlePersonSelect = (personId: string) => {
@@ -368,23 +402,51 @@ function AdminPageInner() {
     }
   }, [newPersonForm.parentId, selectedGenealogy]);
 
-  const handleSaveGenealogy = (e: React.FormEvent) => {
+  const handleDeletePerson = (genealogyId: string, personId: string) => {
+    confirmAction('删除人物', '确定要删除此人物吗？此操作不可恢复。', async () => {
+      // Update local state immediately
+      setAllPersons(prev => {
+        const updated = { ...prev };
+        if (updated[genealogyId]) {
+          updated[genealogyId] = updated[genealogyId].filter(p => p.id !== personId);
+        }
+        return updated;
+      });
+      await deletePersonFromCloud(personId);
+      await refreshData();
+    });
+  };
+
+  const handleSaveGenealogy = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!genealogyForm.id || !genealogyForm.name) return;
     const allG = getSupabaseGenealogies();
-    const isBaseGenealogy = allG.some(g => g.id === genealogyForm.id);
-    if (editingGenealogyId) {
-      updateCustomGenealogy(editingGenealogyId, genealogyForm);
+    const existingIdx = allG.findIndex(g => g.id === genealogyForm.id);
+    
+    const newGenealogy = {
+      id: genealogyForm.id,
+      name: genealogyForm.name,
+      description: genealogyForm.description,
+      origin: genealogyForm.origin,
+      foundingYear: genealogyForm.foundingYear,
+      ancestor: null,
+      people: existingIdx >= 0 ? allG[existingIdx].people : {},
+    };
+
+    if (existingIdx >= 0) {
+      // Update existing
+      updateCustomGenealogy(genealogyForm.id, genealogyForm);
       setEditingGenealogyId(null);
-    } else if (isBaseGenealogy) {
-      // Override base genealogy metadata via custom overlay
-      const base = allG.find(g => g.id === genealogyForm.id);
-      saveCustomGenealogy({ ...genealogyForm, introductions: [] });
+      // Update local state immediately
+      setAllGenealogies(prev => prev.map(g => g.id === genealogyForm.id ? { ...g, ...genealogyForm } : g));
     } else {
-      saveCustomGenealogy({ ...genealogyForm, introductions: [] });
+      await saveCustomGenealogy({ ...genealogyForm, introductions: [] });
+      // Update local state immediately
+      setAllGenealogies(prev => [...prev, newGenealogy]);
     }
     setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' });
-    setShowGenealogyForm(false); setEditingGenealogyId(null); refreshData();
+    setShowGenealogyForm(false); setEditingGenealogyId(null);
+    await refreshData();
   };
 
   const handleEditGenealogy = (g: any) => {
@@ -393,9 +455,11 @@ function AdminPageInner() {
   };
 
   const handleDeleteGenealogy = (id: string) => {
-    confirmAction('删除族谱', '确定要删除此族谱吗？此操作将同时删除该族谱下的人物数据和介绍内容，不可恢复。', () => {
-      deleteCustomGenealogy(id);
-      refreshData();
+    confirmAction('删除族谱', '确定要删除此族谱吗？此操作将同时删除该族谱下的人物数据和介绍内容，不可恢复。', async () => {
+      // Update local state immediately
+      setAllGenealogies(prev => prev.filter(g => g.id !== id));
+      await deleteCustomGenealogy(id);
+      await refreshData();
     });
   };
 
@@ -410,12 +474,15 @@ function AdminPageInner() {
     setShowIntroEditor(false);
   };
 
-  const handleSaveAdmin = (e: React.FormEvent) => {
+  const handleSaveAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adminForm.username || !adminForm.displayName) return;
-    saveAdmin({ ...adminForm, id: adminForm.id || undefined });
+    await saveAdmin({ ...adminForm, id: adminForm.id || undefined });
     setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin', status: 'active', editableGenealogies: [] });
-    setShowAdminForm(false); setEditingAdminId(null); refreshData();
+    setShowAdminForm(false); setEditingAdminId(null);
+    // Update local state immediately
+    setAdmins(getAdmins());
+    await refreshData();
   };
 
   const handleEditAdmin = (a: any) => {
@@ -425,8 +492,10 @@ function AdminPageInner() {
 
   const handleDeleteAdmin = (id: string) => {
     if (id === 'default') return;
-    confirmAction('删除管理员', '确定要删除此管理员账户吗？此操作不可恢复。', () => {
-      deleteAdmin(id); refreshData();
+    confirmAction('删除管理员', '确定要删除此管理员账户吗？此操作不可恢复。', async () => {
+      // Update local state immediately
+      setAdmins(prev => prev.filter(a => a.id !== id));
+      await deleteAdmin(id); await refreshData();
     });
   };
 
@@ -771,6 +840,7 @@ function AdminPageInner() {
                             <div className="flex items-center gap-2">
                               {(p as any).status === 'pending' && <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">待审核</span>}
                               {p.parentId && <span className="text-xs text-muted-foreground">父ID: {p.parentId}</span>}
+                              <button onClick={() => handleDeletePerson(genealogyId, p.id)} className="inline-flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3 h-3" />删除</button>
                             </div>
                           </div>
                         ))}

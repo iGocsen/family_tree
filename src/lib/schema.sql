@@ -42,6 +42,23 @@ CREATE TABLE IF NOT EXISTS people (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ===== Person Additions Table (pending new persons) =====
+CREATE TABLE IF NOT EXISTS person_add (
+  id TEXT PRIMARY KEY,
+  genealogy_id TEXT NOT NULL REFERENCES genealogies(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  birth_year TEXT DEFAULT '',
+  death_year TEXT DEFAULT '',
+  gender TEXT NOT NULL DEFAULT 'male',
+  spouse TEXT DEFAULT '',
+  parent_id TEXT DEFAULT '',
+  biography TEXT DEFAULT '',
+  achievements TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ===== Person Edits Table =====
 CREATE TABLE IF NOT EXISTS person_edits (
   id TEXT PRIMARY KEY,
