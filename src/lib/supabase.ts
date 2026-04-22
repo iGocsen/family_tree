@@ -231,9 +231,73 @@ export async function seedBaseData(): Promise<{ success: boolean; message: strin
 }
 
 // ===== Migration: LocalStorage → Supabase =====
-export async function migrateToSupabase(): Promise<{ success: boolean; message: string }> {
+export async function migrateToSupabase(options: { includeBaseData?: boolean } = {}): Promise<{ success: boolean; message: string }> {
   try {
     const results: string[] = [];
+
+    // Optionally seed base genealogies and people
+    if (options.includeBaseData) {
+      const existing = await fetchGenealogies();
+      const existingIds = existing.map(g => g.id);
+
+      const baseGenealogies = [
+        { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', founding_year: '1680' },
+        { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', founding_year: '1690' },
+        { id: 'chen', name: '陈氏族谱', description: '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', origin: '河南 → 四川成都', founding_year: '1700' },
+      ];
+
+      for (const g of baseGenealogies) {
+        if (!existingIds.includes(g.id)) {
+          await saveGenealogyToCloud({ ...g, is_base: true, created_at: new Date().toISOString() });
+          results.push(`已创建族谱: ${g.name}`);
+        }
+      }
+
+      const existingPeople = await fetchAllPeople();
+      const existingPersonIds = existingPeople.map(p => p.id);
+
+      const { liPeople, zhangPeople, chenPeople } = await import('@/lib/base-data');
+
+      const allBasePeople = [
+        ...Object.values(liPeople).map(p => ({ ...p, genealogy_id: 'li' })),
+        ...Object.values(zhangPeople).map(p => ({ ...p, genealogy_id: 'zhang' })),
+        ...Object.values(chenPeople).map(p => ({ ...p, genealogy_id: 'chen' })),
+      ];
+
+      let peopleAdded = 0;
+      const peopleToInsert = allBasePeople.filter(p => !existingPersonIds.includes(p.id));
+      
+      if (peopleToInsert.length > 0) {
+        const batchSize = 50;
+        for (let i = 0; i < peopleToInsert.length; i += batchSize) {
+          const batch = peopleToInsert.slice(i, i + batchSize);
+          const records = batch.map(p => ({
+            id: p.id, genealogy_id: p.genealogy_id, name: p.name, generation: p.generation,
+            birth_year: p.birthYear || '', death_year: p.deathYear || '', gender: p.gender,
+            spouse: p.spouse || '', parent_id: p.parentId || '', biography: p.biography,
+            achievements: p.achievements?.join('\n') || '', status: 'approved',
+            created_at: new Date().toISOString(),
+          }));
+          
+          const { error } = await supabase.from('people').insert(records);
+          if (error) console.error('Failed to batch insert people:', error);
+          else peopleAdded += batch.length;
+        }
+      }
+      
+      if (peopleAdded > 0) results.push(`已迁移 ${peopleAdded} 个基础人物`);
+
+      const existingAdmins = await fetchAdmins();
+      if (!existingAdmins.find(a => a.id === 'default')) {
+        await saveAdminToCloud({
+          id: 'default', username: 'admin', password_hash: 'password',
+          display_name: '超级管理员', bio: null, contact: null,
+          role: 'super', status: 'active', editable_genealogies: [],
+          created_at: new Date().toISOString(),
+        });
+        results.push('已创建默认管理员');
+      }
+    }
 
     // Migrate custom genealogies from localStorage
     const customGenealogies = JSON.parse(localStorage.getItem('genealogy_custom') || '[]');

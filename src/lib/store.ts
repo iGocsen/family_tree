@@ -84,10 +84,8 @@ export function getCurrentUserId(): string | null {
 }
 
 // ===== Data Refresh =====
+// NOTE: Does NOT auto-seed. Seeding only happens via migrateToSupabase() button.
 export async function refreshAllData(): Promise<void> {
-  // Seed base data if needed
-  await seedBaseData();
-
   const [genealogiesData, allPeople, feedbacks, edits, admins] = await Promise.all([
     fetchGenealogies(),
     fetchAllPeople(),

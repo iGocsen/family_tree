@@ -9,7 +9,7 @@ export default function IntroductionPage() {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    refreshAllData().then(() => setIsLoaded(true));
+    refreshAllData().then(() => setIsLoaded(true)).catch(() => setIsLoaded(true));
   }, []);
 
   const genealogy = getGenealogy(id || '');

@@ -10,7 +10,7 @@ export default function HomePage() {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    refreshAllData().then(() => setIsLoaded(true));
+    refreshAllData().then(() => setIsLoaded(true)).catch(() => setIsLoaded(true));
   }, []);
 
   // Get all genealogies from Supabase cache
@@ -41,6 +41,25 @@ export default function HomePage() {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Database empty guide
+  if (allGenealogies.length === 0) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="text-center max-w-md">
+          <BookOpen className="w-16 h-16 text-muted-foreground/30 mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-foreground mb-3">数据库为空</h2>
+          <p className="text-muted-foreground mb-8">
+            请先登录管理后台，点击"迁移数据到 Supabase"并勾选"是否同步默认数据"来导入初始族谱和人物数据。
+          </p>
+          <Link to="/admin" className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors font-medium">
+            <Settings className="w-5 h-5" />
+            前往管理后台
+          </Link>
+        </div>
       </div>
     );
   }

@@ -12,7 +12,7 @@ export default function GenealogyPage() {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    refreshAllData().then(() => setIsLoaded(true));
+    refreshAllData().then(() => setIsLoaded(true)).catch(() => setIsLoaded(true));
   }, []);
 
   const genealogy = getGenealogy(id || '');
@@ -48,15 +48,21 @@ export default function GenealogyPage() {
 
   if (!genealogy) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <AlertCircle className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-foreground mb-2">未找到族谱</h2>
-          <p className="text-muted-foreground mb-6">该族谱不存在或已被移除</p>
-          <Link to="/" className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
-            <ArrowLeft className="w-4 h-4" />
-            返回首页
-          </Link>
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="text-center max-w-md">
+          <TreePine className="w-16 h-16 text-muted-foreground/30 mx-auto mb-6" />
+          <h2 className="text-2xl font-bold text-foreground mb-3">未找到族谱</h2>
+          <p className="text-muted-foreground mb-8">
+            数据库中暂无此族谱数据。请先登录管理后台，点击"迁移数据到 Supabase"并勾选"是否同步默认数据"来导入初始数据。
+          </p>
+          <div className="flex items-center justify-center gap-4">
+            <Link to="/" className="inline-flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">
+              <ArrowLeft className="w-4 h-4" />返回首页
+            </Link>
+            <Link to="/admin" className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors">
+              <Settings className="w-4 h-4" />管理后台
+            </Link>
+          </div>
         </div>
       </div>
     );

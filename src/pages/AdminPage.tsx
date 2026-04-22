@@ -34,7 +34,8 @@ function LoginPage() {
     await new Promise(r => setTimeout(r, 500));
     if (await login(username, password)) {
       await refreshAllData();
-      navigate('/admin', { replace: true });
+      // Force full page reload to re-mount AdminPage with authenticated state
+      window.location.reload();
     }
     else { setError('账号或密码错误'); }
     setIsLoggingIn(false);
@@ -74,6 +75,7 @@ function LoginPage() {
 // ===== Admin Page =====
 function AdminPageInner() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [isLoaded, setIsLoaded] = useState(false);
   const [feedbacks, setFeedbacks] = useState<FeedbackRecord[]>(getFeedbacks());
   const [edits, setEdits] = useState<PersonEdit[]>(getPersonEdits());
   const [newPersons, setNewPersons] = useState(getNewPersons());
@@ -81,6 +83,18 @@ function AdminPageInner() {
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackRecord | null>(null);
   const [adminNote, setAdminNote] = useState('');
   const [showFeedbackDetail, setShowFeedbackDetail] = useState(false);
+
+  // Load all data from Supabase on mount
+  useEffect(() => {
+    refreshAllData().then(() => {
+      setFeedbacks(getFeedbacks());
+      setEdits(getPersonEdits());
+      setNewPersons(getNewPersons());
+      setStats(getStats());
+      setAdmins(getAdmins());
+      setIsLoaded(true);
+    }).catch(() => setIsLoaded(true));
+  }, []);
 
   const [newPersonForm, setNewPersonForm] = useState({
     genealogyId: '', name: '', generation: 1, birthYear: '', deathYear: '',
@@ -117,14 +131,17 @@ function AdminPageInner() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [migrating, setMigrating] = useState(false);
   const [migrationResult, setMigrationResult] = useState<string | null>(null);
+  const [includeBaseData, setIncludeBaseData] = useState(false);
 
   const handleMigrate = async () => {
     setMigrating(true);
     setMigrationResult(null);
     try {
-      const result = await migrateToSupabase();
+      const result = await migrateToSupabase({ includeBaseData });
       setMigrationResult(result.message);
-      if (result.success) refreshData();
+      if (result.success) {
+        await refreshAllData();
+      }
     } catch (err: any) {
       setMigrationResult(`迁移失败: ${err.message}`);
     }
@@ -132,9 +149,13 @@ function AdminPageInner() {
   };
 
   const navigate = useNavigate();
-  const refreshData = () => {
-    setFeedbacks(getFeedbacks()); setEdits(getPersonEdits()); setNewPersons(getNewPersons());
-    setStats(getStats()); setAdmins(getAdmins());
+  const refreshData = async () => {
+    await refreshAllData();
+    setFeedbacks(getFeedbacks());
+    setEdits(getPersonEdits());
+    setNewPersons(getNewPersons());
+    setStats(getStats());
+    setAdmins(getAdmins());
   };
 
   const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
@@ -343,6 +364,14 @@ function AdminPageInner() {
     refreshData();
   };
 
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-lg border-b border-border">
@@ -355,7 +384,7 @@ function AdminPageInner() {
             </div>
             <div className="flex items-center gap-3">
               <button onClick={refreshData} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-lg hover:bg-secondary"><RefreshCw className="w-4 h-4" />刷新</button>
-              <button onClick={() => { logout(); window.location.href = '/'; }} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:text-destructive/80 transition-colors rounded-lg hover:bg-destructive/10"><LogOut className="w-4 h-4" />退出</button>
+              <button onClick={() => { logout(); window.location.href = '/#/'; }} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:text-destructive/80 transition-colors rounded-lg hover:bg-destructive/10"><LogOut className="w-4 h-4" />退出</button>
             </div>
           </div>
         </div>
@@ -412,11 +441,15 @@ function AdminPageInner() {
                 </div>
               )}
               <div className="mt-4 pt-4 border-t border-border">
+                <label className="flex items-center gap-2 mb-3 cursor-pointer">
+                  <input type="checkbox" checked={includeBaseData} onChange={(e) => setIncludeBaseData(e.target.checked)} className="rounded border-border" />
+                  <span className="text-sm text-foreground">是否同步默认数据</span>
+                </label>
                 <button onClick={handleMigrate} disabled={migrating} className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors text-sm font-medium disabled:opacity-50">
-                  <RefreshCw className={`w-4 h-4 ${migrating ? 'animate-spin' : ''}`} />
+                  <Cloud className="w-4 h-4" />
                   {migrating ? '迁移中...' : '迁移数据到 Supabase'}
                 </button>
-                <p className="text-xs text-muted-foreground mt-2">将本地缓存的族谱、人物、反馈等数据同步到云端数据库</p>
+                <p className="text-xs text-muted-foreground mt-2">将本地缓存的族谱、人物、反馈等数据同步到云端数据库{includeBaseData ? '（含默认族谱和人物数据）' : ''}</p>
               </div>
             </div>
           </div>
