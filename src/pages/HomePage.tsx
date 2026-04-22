@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { getSupabaseGenealogies, getMaxGeneration } from '@/lib/data';
+import { getSupabaseGenealogies, getMaxGeneration, Genealogy } from '@/lib/data';
 import { refreshAllData } from '@/lib/store';
 import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText, Search } from 'lucide-react';
 
@@ -8,15 +8,14 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [allGenealogies, setAllGenealogies] = useState<Genealogy[]>([]);
 
   useEffect(() => {
-    refreshAllData().then(() => setIsLoaded(true)).catch(() => setIsLoaded(true));
+    refreshAllData().then(() => {
+      setAllGenealogies(getSupabaseGenealogies());
+      setIsLoaded(true);
+    }).catch(() => setIsLoaded(true));
   }, []);
-
-  // Get all genealogies from Supabase cache
-  const allGenealogies = useMemo(() => {
-    return getSupabaseGenealogies();
-  }, [isLoaded]);
 
   // Filter by search
   const filteredGenealogies = useMemo(() => {

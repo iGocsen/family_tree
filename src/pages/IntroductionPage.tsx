@@ -1,20 +1,24 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getGenealogy, getMaxGeneration, getSupabaseGenealogies, getGenealogyIntroductionsFromCache } from '@/lib/data';
+import { getGenealogy, getMaxGeneration, getGenealogyIntroductionsFromCache, getSupabaseGenealogies } from '@/lib/data';
 import { refreshAllData } from '@/lib/store';
 import { ArrowLeft, MapPin, Calendar, Users, BookOpen, Award, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 
 export default function IntroductionPage() {
   const { id } = useParams<{ id: string }>();
   const [isLoaded, setIsLoaded] = useState(false);
+  const [genealogy, setGenealogy] = useState<ReturnType<typeof getGenealogy>>(null);
+  const [introductions, setIntroductions] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(0);
 
   useEffect(() => {
-    refreshAllData().then(() => setIsLoaded(true)).catch(() => setIsLoaded(true));
-  }, []);
-
-  const genealogy = getGenealogy(id || '');
-  const [currentPage, setCurrentPage] = useState(0);
-  const introductions = getGenealogyIntroductionsFromCache(id || '');
+    refreshAllData().then(() => {
+      const g = getGenealogy(id || '');
+      setGenealogy(g);
+      setIntroductions(getGenealogyIntroductionsFromCache(id || ''));
+      setIsLoaded(true);
+    }).catch(() => setIsLoaded(true));
+  }, [id]);
 
   if (!isLoaded) {
     return (
