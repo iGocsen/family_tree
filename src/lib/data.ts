@@ -6,26 +6,39 @@ export interface Person {
 
 export interface Genealogy {
   id: string; name: string; description: string; origin: string; foundingYear: string;
-  ancestor: Person; people: Record<string, Person>;
+  ancestor: Person | null; people: Record<string, Person>;
 }
 
-// ===== Base Genealogies (metadata only, people come from Supabase) =====
-export const genealogies: Genealogy[] = [
-  { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', foundingYear: '1680', ancestor: { id: 'li-1', name: '李明德', generation: 1, birthYear: '1680', deathYear: '1752', gender: 'male', biography: '李氏一世祖，字光远，号德庵。清康熙年间自福建漳州迁居广东潮州，以耕读传家，开创李氏一脉。' }, people: {} },
-  { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', foundingYear: '1690', ancestor: { id: 'zhang-1', name: '张文远', generation: 1, birthYear: '1690', deathYear: '1760', gender: 'male', biography: '张氏一世祖，字致远。清康熙末年自江西迁居湖南长沙，以耕读为业，开创张氏基业。' }, people: {} },
-  { id: 'chen', name: '陈氏族谱', description: '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', origin: '河南 → 四川成都', foundingYear: '1700', ancestor: { id: 'chen-1', name: '陈德安', generation: 1, birthYear: '1700', deathYear: '1770', gender: 'male', biography: '陈氏一世祖，字安之。清康熙年间自河南迁居四川成都，以农桑为本，开创陈氏基业。' }, people: {} },
-];
+// ===== Supabase-driven data cache =====
+// All data comes from Supabase, populated by store.ts via setSupabaseCache()
 
-// ===== People cache (populated by store.ts from Supabase) =====
+let _genealogiesCache: Genealogy[] = [];
 let _peopleCache: Record<string, Record<string, Person>> = {};
+let _introductionsCache: Record<string, string[]> = {};
 
-export function setPeopleCache(cache: Record<string, Record<string, Person>>): void {
-  _peopleCache = cache;
+export function setSupabaseCache(
+  genealogies: Genealogy[],
+  peopleByGenealogy: Record<string, Record<string, Person>>,
+  introductions: Record<string, string[]>
+): void {
+  _genealogiesCache = genealogies;
+  _peopleCache = peopleByGenealogy;
+  _introductionsCache = introductions;
+}
+
+export function getSupabaseGenealogies(): Genealogy[] {
+  return _genealogiesCache;
 }
 
 function getPeopleForGenealogy(genealogyId: string): Record<string, Person> {
   return _peopleCache[genealogyId] || {};
 }
+
+export function getGenealogyIntroductionsFromCache(id: string): string[] {
+  return _introductionsCache[id] || [];
+}
+
+// ===== Helper functions that work with Supabase cache =====
 
 export function searchPerson(genealogyId: string, query: string): Person[] {
   const people = getPeopleForGenealogy(genealogyId);
@@ -101,15 +114,5 @@ export function getMaxGeneration(genealogyId: string): number {
 }
 
 export function getGenealogy(id: string): Genealogy | undefined {
-  const base = genealogies.find(g => g.id === id);
-  if (!base) return undefined;
-  
-  const people = getPeopleForGenealogy(id);
-  const ancestor = Object.values(people).find(p => !p.parentId) || Object.values(people).find(p => p.generation === 1) || base.ancestor;
-  
-  return {
-    ...base,
-    people,
-    ancestor: ancestor || base.ancestor,
-  };
+  return _genealogiesCache.find(g => g.id === id);
 }

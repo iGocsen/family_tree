@@ -1,22 +1,28 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getGenealogy, getMaxGeneration, genealogies } from '@/lib/data';
-import { getCustomGenealogies, getGenealogyIntroductions } from '@/lib/store';
+import { getGenealogy, getMaxGeneration, getSupabaseGenealogies, getGenealogyIntroductionsFromCache } from '@/lib/data';
+import { refreshAllData } from '@/lib/store';
 import { ArrowLeft, MapPin, Calendar, Users, BookOpen, Award, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 
 export default function IntroductionPage() {
   const { id } = useParams<{ id: string }>();
-  const baseGenealogy = genealogies.find(g => g.id === id);
-  const customGenealogies = getCustomGenealogies();
-  const customGenealogy = customGenealogies.find(g => g.id === id);
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  const genealogy = baseGenealogy || (customGenealogy ? {
-    ...customGenealogy,
-    ancestor: Object.values(customGenealogy.people).find(p => p.generation === 1),
-  } : null);
+  useEffect(() => {
+    refreshAllData().then(() => setIsLoaded(true));
+  }, []);
 
+  const genealogy = getGenealogy(id || '');
   const [currentPage, setCurrentPage] = useState(0);
-  const introductions = getGenealogyIntroductions(id || '');
+  const introductions = getGenealogyIntroductionsFromCache(id || '');
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!genealogy) {
     return (
@@ -60,7 +66,6 @@ export default function IntroductionPage() {
       </header>
 
       <div className="max-w-5xl mx-auto px-6 py-12">
-        {/* Page Content */}
         {currentPage === 0 ? (
           <>
             {/* Hero */}
@@ -184,7 +189,7 @@ export default function IntroductionPage() {
         )}
 
         {/* CTA */}
-        <div className="mt-12 text-center">
+        <div className="mt-12 text-center flex items-center justify-center gap-4">
           <Link
             to={`/genealogy/${genealogy.id}`}
             className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl hover:bg-primary/90 transition-colors font-medium"
@@ -195,7 +200,7 @@ export default function IntroductionPage() {
           {introductions.length > 0 && (
             <button
               onClick={() => setCurrentPage(currentPage === 0 ? 1 : 0)}
-              className="ml-4 inline-flex items-center gap-2 px-6 py-3 bg-secondary text-secondary-foreground rounded-xl hover:bg-secondary/80 transition-colors font-medium"
+              className="inline-flex items-center gap-2 px-6 py-3 bg-secondary text-secondary-foreground rounded-xl hover:bg-secondary/80 transition-colors font-medium"
             >
               <FileText className="w-5 h-5" />
               {currentPage === 0 ? '查看更多介绍' : '返回概览'}

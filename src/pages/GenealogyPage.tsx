@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { getGenealogy, searchPerson, getChildren, getRootPerson, Person, getAncestorChain, getPersonsByGeneration, getTreeRoots } from '@/lib/data';
+import { refreshAllData } from '@/lib/store';
 import { Search, ChevronLeft, ChevronRight, User, ArrowLeft, TreePine, AlertCircle } from 'lucide-react';
 import TreeView from '@/components/TreeView';
 import PersonDetail from '@/components/PersonDetail';
@@ -8,6 +9,12 @@ import FeedbackDialog from '@/components/FeedbackDialog';
 
 export default function GenealogyPage() {
   const { id } = useParams<{ id: string }>();
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    refreshAllData().then(() => setIsLoaded(true));
+  }, []);
+
   const genealogy = getGenealogy(id || '');
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -30,6 +37,14 @@ export default function GenealogyPage() {
       }
     }
   }, [genealogy, selectedPerson]);
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!genealogy) {
     return (

@@ -1,5 +1,6 @@
 // Base person data for seeding Supabase
-// This file contains only the raw person data, not the Genealogy objects
+// This file contains ONLY the raw person data, used by seedBaseData() to populate Supabase on first run
+// All runtime data is read from Supabase, never from this file
 
 export interface BasePerson {
   id: string; name: string; generation: number; birthYear?: string; deathYear?: string;

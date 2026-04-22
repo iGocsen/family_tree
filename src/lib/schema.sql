@@ -11,9 +11,18 @@ CREATE TABLE IF NOT EXISTS genealogies (
   description TEXT DEFAULT '',
   origin TEXT DEFAULT '',
   founding_year TEXT DEFAULT '',
-  introductions JSONB DEFAULT '[]'::jsonb,
   is_base BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ===== Genealogy Introductions Table =====
+CREATE TABLE IF NOT EXISTS gnlogy_intru (
+  id TEXT PRIMARY KEY,
+  genealogy_id TEXT NOT NULL REFERENCES genealogies(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  page_number INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(genealogy_id, page_number)
 );
 
 -- ===== People Table =====
@@ -30,6 +39,20 @@ CREATE TABLE IF NOT EXISTS people (
   biography TEXT DEFAULT '',
   achievements TEXT DEFAULT '',
   status TEXT NOT NULL DEFAULT 'approved',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ===== Person Edits Table =====
+CREATE TABLE IF NOT EXISTS person_edits (
+  id TEXT PRIMARY KEY,
+  genealogy_id TEXT NOT NULL,
+  genealogy_name TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  person_name TEXT NOT NULL,
+  field TEXT NOT NULL,
+  old_value TEXT NOT NULL,
+  new_value TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -51,20 +74,6 @@ CREATE TABLE IF NOT EXISTS feedbacks (
   resolved_at TIMESTAMPTZ
 );
 
--- ===== Person Edits Table =====
-CREATE TABLE IF NOT EXISTS person_edits (
-  id TEXT PRIMARY KEY,
-  genealogy_id TEXT NOT NULL,
-  genealogy_name TEXT NOT NULL,
-  person_id TEXT NOT NULL,
-  person_name TEXT NOT NULL,
-  field TEXT NOT NULL,
-  old_value TEXT NOT NULL,
-  new_value TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 -- ===== Admins Table =====
 CREATE TABLE IF NOT EXISTS admins (
   id TEXT PRIMARY KEY,
@@ -83,6 +92,7 @@ CREATE TABLE IF NOT EXISTS admins (
 CREATE INDEX IF NOT EXISTS idx_people_genealogy ON people(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_people_generation ON people(generation);
 CREATE INDEX IF NOT EXISTS idx_people_status ON people(status);
+CREATE INDEX IF NOT EXISTS idx_gnlogy_intru_genealogy ON gnlogy_intru(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_status ON feedbacks(status);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_genealogy ON feedbacks(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_person_edits_status ON person_edits(status);
@@ -90,23 +100,26 @@ CREATE INDEX IF NOT EXISTS idx_admins_username ON admins(username);
 
 -- ===== Row Level Security (RLS) =====
 ALTER TABLE genealogies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE gnlogy_intru ENABLE ROW LEVEL SECURITY;
 ALTER TABLE people ENABLE ROW LEVEL SECURITY;
-ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE person_edits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE feedbacks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
 
 -- Allow anonymous read access to all tables
 CREATE POLICY "Allow anonymous read access to genealogies" ON genealogies FOR SELECT USING (true);
+CREATE POLICY "Allow anonymous read access to gnlogy_intru" ON gnlogy_intru FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous read access to people" ON people FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous read access to feedbacks" ON feedbacks FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous read access to person_edits" ON person_edits FOR SELECT USING (true);
+CREATE POLICY "Allow anonymous read access to feedbacks" ON feedbacks FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous read access to admins" ON admins FOR SELECT USING (true);
 
 -- Allow anonymous write access (for simplicity, can be restricted later with auth)
 CREATE POLICY "Allow anonymous write access to genealogies" ON genealogies FOR ALL USING (true);
+CREATE POLICY "Allow anonymous write access to gnlogy_intru" ON gnlogy_intru FOR ALL USING (true);
 CREATE POLICY "Allow anonymous write access to people" ON people FOR ALL USING (true);
-CREATE POLICY "Allow anonymous write access to feedbacks" ON feedbacks FOR ALL USING (true);
 CREATE POLICY "Allow anonymous write access to person_edits" ON person_edits FOR ALL USING (true);
+CREATE POLICY "Allow anonymous write access to feedbacks" ON feedbacks FOR ALL USING (true);
 CREATE POLICY "Allow anonymous write access to admins" ON admins FOR ALL USING (true);
 
 -- ===== Insert Default Admin =====

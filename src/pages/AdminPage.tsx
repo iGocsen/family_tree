@@ -12,7 +12,7 @@ import {
   migrateToSupabase, refreshAllData,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
-import { genealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
+import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
 import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
@@ -98,7 +98,6 @@ function AdminPageInner() {
   const [editingEditId, setEditingEditId] = useState<string | null>(null);
 
   // Genealogy management
-  const [customGenealogies, setCustomGenealogies] = useState(getCustomGenealogies());
   const [showGenealogyForm, setShowGenealogyForm] = useState(false);
   const [genealogyForm, setGenealogyForm] = useState({ id: '', name: '', description: '', origin: '', foundingYear: '' });
   const [editingGenealogyId, setEditingGenealogyId] = useState<string | null>(null);
@@ -135,7 +134,7 @@ function AdminPageInner() {
   const navigate = useNavigate();
   const refreshData = () => {
     setFeedbacks(getFeedbacks()); setEdits(getPersonEdits()); setNewPersons(getNewPersons());
-    setStats(getStats()); setCustomGenealogies(getCustomGenealogies()); setAdmins(getAdmins());
+    setStats(getStats()); setAdmins(getAdmins());
   };
 
   const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
@@ -234,17 +233,10 @@ function AdminPageInner() {
   const feedbackTypeLabels: Record<string, string> = { 'info-error': '信息有误', 'missing-info': '信息缺失', 'duplicate': '重复记录', 'other': '其他问题' };
   const fieldLabels: Record<string, string> = { name: '姓名', birthYear: '出生年份', deathYear: '逝世年份', biography: '生平介绍', spouse: '配偶', achievements: '主要成就' };
 
-  // All genealogies: base + custom (no isCustom flag needed)
+  // All genealogies: from Supabase cache
   const allGenealogies = useMemo(() => {
-    const base = genealogies.map(g => ({ ...g }));
-    const custom = customGenealogies.map(cg => ({
-      id: cg.id, name: cg.name, description: cg.description, origin: cg.origin,
-      foundingYear: cg.foundingYear,
-      ancestor: Object.values(cg.people).find(p => p.generation === 1),
-      people: cg.people,
-    }));
-    return [...base, ...custom];
-  }, [customGenealogies]);
+    return getSupabaseGenealogies();
+  }, []);
 
   const tabs: { key: TabType; label: string; icon: React.ReactNode; count?: number }[] = [
     { key: 'dashboard', label: '概览', icon: <BarChart3 className="w-4 h-4" /> },
@@ -289,16 +281,17 @@ function AdminPageInner() {
   const handleSaveGenealogy = (e: React.FormEvent) => {
     e.preventDefault();
     if (!genealogyForm.id || !genealogyForm.name) return;
-    const isBaseGenealogy = genealogies.some(g => g.id === genealogyForm.id);
+    const allG = getSupabaseGenealogies();
+    const isBaseGenealogy = allG.some(g => g.id === genealogyForm.id);
     if (editingGenealogyId) {
       updateCustomGenealogy(editingGenealogyId, genealogyForm);
       setEditingGenealogyId(null);
     } else if (isBaseGenealogy) {
       // Override base genealogy metadata via custom overlay
-      const base = genealogies.find(g => g.id === genealogyForm.id);
-      saveCustomGenealogy({ ...genealogyForm, people: base?.people || {}, introductions: [] });
+      const base = allG.find(g => g.id === genealogyForm.id);
+      saveCustomGenealogy({ ...genealogyForm, introductions: [] });
     } else {
-      saveCustomGenealogy({ ...genealogyForm, people: {}, introductions: [] });
+      saveCustomGenealogy({ ...genealogyForm, introductions: [] });
     }
     setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' });
     setShowGenealogyForm(false); setEditingGenealogyId(null); refreshData();
@@ -310,14 +303,7 @@ function AdminPageInner() {
   };
 
   const handleDeleteGenealogy = (id: string) => {
-    const isBase = genealogies.some(g => g.id === id);
-    if (isBase) {
-      // For base genealogies, remove the custom overlay
-      const list = getCustomGenealogies().filter(g => g.id !== id);
-      localStorage.setItem('genealogy_custom', JSON.stringify(list));
-    } else {
-      deleteCustomGenealogy(id);
-    }
+    deleteCustomGenealogy(id);
     refreshData();
   };
 
@@ -654,9 +640,9 @@ function AdminPageInner() {
 
             <div className="space-y-3">
               {allGenealogies.map(g => {
+                const allG = getSupabaseGenealogies();
                 const mergedG = getGenealogy(g.id);
-                const personCount = mergedG ? Object.keys(mergedG.people).length : Object.keys(g.people).length;
-                const hasCustom = !!customGenealogies.find(cg => cg.id === g.id);
+                const personCount = mergedG ? Object.keys(mergedG.people).length : 0;
                 return (
                   <div key={g.id} className="bg-card border border-border rounded-xl p-5">
                     <div className="flex items-start justify-between">

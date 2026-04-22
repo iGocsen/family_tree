@@ -1,5 +1,5 @@
-import { Person, genealogies as baseGenealogies, setPeopleCache } from '@/lib/data';
-import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl } from './supabase';
+import { Person, setSupabaseCache, Genealogy } from '@/lib/data';
+import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl, fetchGenealogyIntroductions, saveGenealogyIntroductions, deleteGenealogyIntroductions } from './supabase';
 
 export { seedBaseData, migrateToSupabaseImpl as migrateToSupabase };
 
@@ -39,13 +39,13 @@ let peopleCache: Record<string, Person[]> = {};
 let feedbacksCache: FeedbackRecord[] = [];
 let editsCache: PersonEdit[] = [];
 let adminsCache: AdminUser[] = [];
+let introductionsCache: Record<string, string[]> = {};
 let isInitialized = false;
 
 // ===== Auth =====
 const AUTH_KEY = 'genealogy_admin_auth';
 
 export async function login(username: string, password: string): Promise<boolean> {
-  // Validate against Supabase database
   const { data, error } = await supabase
     .from('admins')
     .select('*')
@@ -55,7 +55,6 @@ export async function login(username: string, password: string): Promise<boolean
     .single();
 
   if (error || !data) {
-    // Fallback to default admin for first-time setup
     if (username === 'admin' && password === 'password') {
       localStorage.setItem(AUTH_KEY, JSON.stringify({ loggedIn: true, loginTime: Date.now(), expiresAt: Date.now() + 24 * 60 * 60 * 1000, userId: 'default' }));
       return true;
@@ -86,8 +85,6 @@ export function getCurrentUserId(): string | null {
 
 // ===== Data Refresh =====
 export async function refreshAllData(): Promise<void> {
-  if (isInitialized) return;
-  
   // Seed base data if needed
   await seedBaseData();
 
@@ -101,7 +98,7 @@ export async function refreshAllData(): Promise<void> {
 
   genealogiesCache = genealogiesData.map(g => ({
     id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
-    foundingYear: g.founding_year || '', people: {}, introductions: g.introductions || [],
+    foundingYear: g.founding_year || '', people: {}, introductions: [],
   }));
 
   // Group people by genealogy
@@ -123,8 +120,21 @@ export async function refreshAllData(): Promise<void> {
     dataPeopleCache[p.genealogy_id][p.id] = person;
   }
 
-  // Set the people cache in data.ts
-  setPeopleCache(dataPeopleCache);
+  // Fetch introductions for each genealogy
+  introductionsCache = {};
+  for (const g of genealogiesData) {
+    const intruPages = await fetchGenealogyIntroductions(g.id);
+    introductionsCache[g.id] = intruPages.map((p: any) => p.content);
+  }
+
+  // Set the Supabase cache in data.ts
+  const genealogiesForCache: Genealogy[] = genealogiesData.map(g => ({
+    id: g.id, name: g.name, description: g.description || '', origin: g.origin || '',
+    foundingYear: g.founding_year || '',
+    ancestor: dataPeopleCache[g.id] ? Object.values(dataPeopleCache[g.id]).find(p => !p.parentId) || Object.values(dataPeopleCache[g.id]).find(p => p.generation === 1) || null : null,
+    people: dataPeopleCache[g.id] || {},
+  }));
+  setSupabaseCache(genealogiesForCache, dataPeopleCache, introductionsCache);
 
   feedbacksCache = feedbacks.map(f => ({
     id: f.id, genealogyId: f.genealogy_id, genealogyName: f.genealogy_name,
@@ -171,14 +181,15 @@ export async function saveCustomGenealogy(g: CustomGenealogy): Promise<void> {
   if (idx >= 0) genealogiesCache[idx] = g; else genealogiesCache.push(g);
   await saveGenealogyToCloud({
     id: g.id, name: g.name, description: g.description, origin: g.origin,
-    founding_year: g.foundingYear, introductions: g.introductions || [],
-    is_base: false, created_at: new Date().toISOString(),
+    founding_year: g.foundingYear, is_base: false, created_at: new Date().toISOString(),
   });
 }
 
 export async function deleteCustomGenealogy(id: string): Promise<void> {
   genealogiesCache = genealogiesCache.filter(g => g.id !== id);
   await deleteGenealogyFromCloud(id);
+  await deleteGenealogyIntroductions(id);
+  delete introductionsCache[id];
 }
 
 export function updateCustomGenealogy(id: string, updates: Partial<CustomGenealogy>): void {
@@ -187,28 +198,19 @@ export function updateCustomGenealogy(id: string, updates: Partial<CustomGenealo
   saveGenealogyToCloud({
     id, name: genealogiesCache[idx]?.name || '', description: genealogiesCache[idx]?.description || '',
     origin: genealogiesCache[idx]?.origin || '', founding_year: genealogiesCache[idx]?.foundingYear || '',
-    introductions: genealogiesCache[idx]?.introductions || [], is_base: false, created_at: new Date().toISOString(),
+    is_base: false, created_at: new Date().toISOString(),
   });
 }
 
 export function updateGenealogyIntroductions(id: string, introductions: string[]): void {
   const idx = genealogiesCache.findIndex(g => g.id === id);
   if (idx >= 0) genealogiesCache[idx].introductions = introductions;
-  const intros = getIntroductions();
-  intros[id] = introductions;
-  localStorage.setItem('genealogy_introductions', JSON.stringify(intros));
-  saveGenealogyToCloud({
-    id, name: genealogiesCache[idx >= 0 ? idx : 0]?.name || '', description: '', origin: '',
-    founding_year: '', introductions, is_base: false, created_at: new Date().toISOString(),
-  });
-}
-
-export function getIntroductions(): Record<string, string[]> {
-  try { const data = localStorage.getItem('genealogy_introductions'); return data ? JSON.parse(data) : {}; } catch { return {}; }
+  introductionsCache[id] = introductions;
+  saveGenealogyIntroductions(id, introductions);
 }
 
 export function getGenealogyIntroductions(id: string): string[] {
-  return getIntroductions()[id] || [];
+  return introductionsCache[id] || [];
 }
 
 // ===== People =====

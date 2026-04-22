@@ -1,38 +1,22 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { genealogies, getMaxGeneration, getGenealogy } from '@/lib/data';
-import { getCustomGenealogies } from '@/lib/store';
+import { getSupabaseGenealogies, getMaxGeneration } from '@/lib/data';
+import { refreshAllData } from '@/lib/store';
 import { BookOpen, ArrowRight, Users, Calendar, MapPin, Settings, FileText, Search } from 'lucide-react';
 
 export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [customGenealogies, setCustomGenealogies] = useState(getCustomGenealogies());
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  // Refresh custom genealogies periodically
   useEffect(() => {
-    const interval = setInterval(() => setCustomGenealogies(getCustomGenealogies()), 2000);
-    return () => clearInterval(interval);
+    refreshAllData().then(() => setIsLoaded(true));
   }, []);
 
-  // Combine base + custom genealogies
+  // Get all genealogies from Supabase cache
   const allGenealogies = useMemo(() => {
-    const base = genealogies.map(g => ({ ...g }));
-    const custom = customGenealogies.map(cg => {
-      // Get merged genealogy to get ancestor and people
-      const merged = getGenealogy(cg.id);
-      return {
-        id: cg.id,
-        name: cg.name,
-        description: cg.description,
-        origin: cg.origin,
-        foundingYear: cg.foundingYear,
-        ancestor: merged?.ancestor || Object.values(cg.people).find(p => p.generation === 1),
-        people: cg.people,
-      };
-    });
-    return [...base, ...custom];
-  }, [customGenealogies]);
+    return getSupabaseGenealogies();
+  }, [isLoaded]);
 
   // Filter by search
   const filteredGenealogies = useMemo(() => {
@@ -52,6 +36,14 @@ export default function HomePage() {
     : count === 2 || count === 4 || count === 7
       ? 'grid-cols-1 md:grid-cols-2 max-w-4xl mx-auto'
       : 'grid-cols-1 md:grid-cols-3';
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
