@@ -32,7 +32,7 @@ function LoginPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setIsLoggingIn(true);
     await new Promise(r => setTimeout(r, 500));
-    if (login(username, password)) {
+    if (await login(username, password)) {
       await refreshAllData();
       navigate('/admin', { replace: true });
     }

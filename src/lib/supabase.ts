@@ -5,9 +5,6 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// ===== Cloud Data Manager =====
-// All data is now read from and written to Supabase
-
 // ===== Genealogies =====
 export async function fetchGenealogies(): Promise<any[]> {
   const { data, error } = await supabase.from('genealogies').select('*').order('created_at', { ascending: false });
@@ -30,9 +27,17 @@ export async function deleteGenealogyFromCloud(id: string): Promise<void> {
 }
 
 // ===== People =====
-export async function fetchPeople(genealogyId: string): Promise<any[]> {
-  const { data, error } = await supabase.from('people').select('*').eq('genealogy_id', genealogyId);
+export async function fetchPeople(genealogyId?: string): Promise<any[]> {
+  let query = supabase.from('people').select('*');
+  if (genealogyId) query = query.eq('genealogy_id', genealogyId);
+  const { data, error } = await query;
   if (error) { console.error('Failed to fetch people:', error); return []; }
+  return data || [];
+}
+
+export async function fetchAllPeople(): Promise<any[]> {
+  const { data, error } = await supabase.from('people').select('*');
+  if (error) { console.error('Failed to fetch all people:', error); return []; }
   return data || [];
 }
 
@@ -119,12 +124,90 @@ export async function deleteAdminFromCloud(id: string): Promise<void> {
   if (error) console.error('Failed to delete admin:', error);
 }
 
+// ===== Seed Base Data =====
+export async function seedBaseData(): Promise<{ success: boolean; message: string }> {
+  try {
+    const results: string[] = [];
+
+    // Check if base genealogies exist
+    const existing = await fetchGenealogies();
+    const existingIds = existing.map(g => g.id);
+
+    // Insert base genealogies if not exist
+    const baseGenealogies = [
+      { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', founding_year: '1680' },
+      { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', founding_year: '1690' },
+      { id: 'chen', name: '陈氏族谱', description: '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', origin: '河南 → 四川成都', founding_year: '1700' },
+    ];
+
+    for (const g of baseGenealogies) {
+      if (!existingIds.includes(g.id)) {
+        await saveGenealogyToCloud({ ...g, introductions: [], is_base: true, created_at: new Date().toISOString() });
+        results.push(`已创建族谱: ${g.name}`);
+      }
+    }
+
+    // Check if base people exist
+    const existingPeople = await fetchAllPeople();
+    const existingPersonIds = existingPeople.map(p => p.id);
+
+    // Import base people data
+    const { liPeople, zhangPeople, chenPeople } = await import('@/lib/base-data');
+
+    const allBasePeople = [
+      ...Object.values(liPeople).map(p => ({ ...p, genealogy_id: 'li' })),
+      ...Object.values(zhangPeople).map(p => ({ ...p, genealogy_id: 'zhang' })),
+      ...Object.values(chenPeople).map(p => ({ ...p, genealogy_id: 'chen' })),
+    ];
+
+    let peopleAdded = 0;
+    // Batch insert for performance
+    const peopleToInsert = allBasePeople.filter(p => !existingPersonIds.includes(p.id));
+    
+    if (peopleToInsert.length > 0) {
+      // Insert in batches of 50
+      const batchSize = 50;
+      for (let i = 0; i < peopleToInsert.length; i += batchSize) {
+        const batch = peopleToInsert.slice(i, i + batchSize);
+        const records = batch.map(p => ({
+          id: p.id, genealogy_id: p.genealogy_id, name: p.name, generation: p.generation,
+          birth_year: p.birthYear || '', death_year: p.deathYear || '', gender: p.gender,
+          spouse: p.spouse || '', parent_id: p.parentId || '', biography: p.biography,
+          achievements: p.achievements?.join('\n') || '', status: 'approved',
+          created_at: new Date().toISOString(),
+        }));
+        
+        const { error } = await supabase.from('people').insert(records);
+        if (error) console.error('Failed to batch insert people:', error);
+        else peopleAdded += batch.length;
+      }
+    }
+    
+    if (peopleAdded > 0) results.push(`已迁移 ${peopleAdded} 个人物`);
+
+    // Check if default admin exists
+    const existingAdmins = await fetchAdmins();
+    if (!existingAdmins.find(a => a.id === 'default')) {
+      await saveAdminToCloud({
+        id: 'default', username: 'admin', password_hash: 'password',
+        display_name: '超级管理员', bio: null, contact: null,
+        role: 'super', status: 'active', editable_genealogies: [],
+        created_at: new Date().toISOString(),
+      });
+      results.push('已创建默认管理员');
+    }
+
+    return { success: true, message: results.length > 0 ? `初始化完成：${results.join('；')}` : '数据已是最新' };
+  } catch (err: any) {
+    return { success: false, message: `初始化失败: ${err.message}` };
+  }
+}
+
 // ===== Migration: LocalStorage → Supabase =====
 export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ success: boolean; message: string }> {
   try {
     const results: string[] = [];
 
-    // 1. Migrate base genealogies (li, zhang, chen)
     const baseGenealogies = baseGenealogiesData || [
       { id: 'li', name: '李氏族谱', description: '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', origin: '福建漳州 → 广东潮州', founding_year: '1680' },
       { id: 'zhang', name: '张氏族谱', description: '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', origin: '江西 → 湖南长沙', founding_year: '1690' },
@@ -135,7 +218,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     results.push(`已迁移 ${baseGenealogies.length} 个基础族谱`);
 
-    // 2. Migrate base genealogy people (if provided)
     if (baseGenealogiesData && baseGenealogiesData.length > 0) {
       for (const g of baseGenealogiesData) {
         if (g.people) {
@@ -154,7 +236,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
       }
     }
 
-    // 3. Migrate custom genealogies
     const customGenealogies = JSON.parse(localStorage.getItem('genealogy_custom') || '[]');
     for (const g of customGenealogies) {
       await saveGenealogyToCloud({
@@ -165,7 +246,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     if (customGenealogies.length > 0) results.push(`已迁移 ${customGenealogies.length} 个自定义族谱`);
 
-    // 4. Migrate all people (approved new persons)
     const newPersons = JSON.parse(localStorage.getItem('genealogy_new_persons') || '[]');
     const approvedPersons = newPersons.filter((p: any) => p.status === 'approved');
     for (const p of approvedPersons) {
@@ -179,7 +259,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     if (approvedPersons.length > 0) results.push(`已迁移 ${approvedPersons.length} 个已审核人物`);
 
-    // 5. Migrate pending persons
     const pendingPersons = newPersons.filter((p: any) => p.status === 'pending');
     for (const p of pendingPersons) {
       await savePersonToCloud({
@@ -192,7 +271,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     if (pendingPersons.length > 0) results.push(`已迁移 ${pendingPersons.length} 个待审核人物`);
 
-    // 6. Migrate feedbacks
     const feedbacks = JSON.parse(localStorage.getItem('genealogy_feedbacks') || '[]');
     for (const fb of feedbacks) {
       await saveFeedbackToCloud({
@@ -205,7 +283,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     if (feedbacks.length > 0) results.push(`已迁移 ${feedbacks.length} 条反馈`);
 
-    // 7. Migrate edits
     const edits = JSON.parse(localStorage.getItem('genealogy_edits') || '[]');
     for (const e of edits) {
       await saveEditToCloud({
@@ -216,7 +293,6 @@ export async function migrateToSupabase(baseGenealogiesData?: any[]): Promise<{ 
     }
     if (edits.length > 0) results.push(`已迁移 ${edits.length} 条修改记录`);
 
-    // 8. Migrate admins
     const admins = JSON.parse(localStorage.getItem('genealogy_admins') || '[]');
     for (const a of admins) {
       await saveAdminToCloud({
