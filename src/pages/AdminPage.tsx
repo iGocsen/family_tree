@@ -13,6 +13,7 @@ import {
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
 import { getSupabaseGenealogies, getGenealogy, getPerson, getMaxGeneration, Person } from '@/lib/data';
+import { savePersonToCloud } from '@/lib/supabase';
 import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
@@ -141,6 +142,13 @@ function AdminPageInner() {
   const [migrationResult, setMigrationResult] = useState<string | null>(null);
   const [includeBaseData, setIncludeBaseData] = useState(false);
 
+  // Confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+
+  const confirmAction = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmDialog({ title, message, onConfirm });
+  };
+
   const handleMigrate = async () => {
     setMigrating(true);
     setMigrationResult(null);
@@ -171,17 +179,64 @@ function AdminPageInner() {
       personsMap[g.id] = getPeopleByGenealogy(g.id);
     }
     setAllPersons(personsMap);
+    // Also refresh genealogies list
+    setAllGenealogies(getSupabaseGenealogies());
   };
 
   const handleFeedbackAction = (id: string, action: 'resolved' | 'rejected') => {
     updateFeedbackStatus(id, action, adminNote);
     setAdminNote(''); setShowFeedbackDetail(false); setSelectedFeedback(null); refreshData();
   };
-  const handleDeleteFeedback = (id: string) => { deleteFeedback(id); refreshData(); };
-  const handleEditAction = (id: string, action: 'approved' | 'rejected') => { updateEditStatus(id, action); refreshData(); };
-  const handleDeleteEdit = (id: string) => { deleteEdit(id); refreshData(); };
+  const handleDeleteFeedback = (id: string) => {
+    confirmAction('删除反馈', '确定要删除此反馈记录吗？此操作不可恢复。', () => {
+      deleteFeedback(id); refreshData();
+    });
+  };
+  const handleEditAction = async (id: string, action: 'approved' | 'rejected') => {
+    // If approved, we need to update the actual person data in people table
+    if (action === 'approved') {
+      const edit = edits.find(e => e.id === id);
+      if (edit) {
+        // Update the person in the Supabase people table
+        const genealogy = getGenealogy(edit.genealogyId);
+        if (genealogy) {
+          const person = genealogy.people[edit.personId];
+          if (person) {
+            // Apply the edit to the person
+            const updatedPerson = { ...person };
+            if (edit.field === 'name') updatedPerson.name = edit.newValue;
+            else if (edit.field === 'birthYear') updatedPerson.birthYear = edit.newValue;
+            else if (edit.field === 'deathYear') updatedPerson.deathYear = edit.newValue;
+            else if (edit.field === 'biography') updatedPerson.biography = edit.newValue;
+            else if (edit.field === 'spouse') updatedPerson.spouse = edit.newValue;
+            else if (edit.field === 'achievements') updatedPerson.achievements = edit.newValue.split('\n').filter((a: string) => a.trim());
+
+            // Save to Supabase
+            await savePersonToCloud({
+              id: person.id, genealogy_id: edit.genealogyId, name: updatedPerson.name, generation: updatedPerson.generation,
+              birth_year: updatedPerson.birthYear || '', death_year: updatedPerson.deathYear || '', gender: updatedPerson.gender,
+              spouse: updatedPerson.spouse || '', parent_id: updatedPerson.parentId || '', biography: updatedPerson.biography,
+              achievements: updatedPerson.achievements?.join('\n') || '', status: 'approved',
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+    updateEditStatus(id, action);
+    await refreshData();
+  };
+  const handleDeleteEdit = (id: string) => {
+    confirmAction('删除修改记录', '确定要删除此修改记录吗？此操作不可恢复。', () => {
+      deleteEdit(id); refreshData();
+    });
+  };
   const handleNewPersonAction = (id: string, action: string) => { updateNewPersonStatus(id, action); refreshData(); };
-  const handleDeleteNewPerson = (id: string) => { deleteNewPerson(id); refreshData(); };
+  const handleDeleteNewPerson = (id: string) => {
+    confirmAction('删除人物', '确定要删除此人物记录吗？此操作不可恢复。', () => {
+      deleteNewPerson(id); refreshData();
+    });
+  };
 
   const handleModifyNewPerson = (person: any) => {
     setNewPersonForm({ genealogyId: person.genealogyId, name: person.name, generation: person.generation, birthYear: person.birthYear, deathYear: person.deathYear, gender: person.gender, spouse: person.spouse, parentId: person.parentId, biography: person.biography, achievements: person.achievements });
@@ -270,9 +325,7 @@ function AdminPageInner() {
   const fieldLabels: Record<string, string> = { name: '姓名', birthYear: '出生年份', deathYear: '逝世年份', biography: '生平介绍', spouse: '配偶', achievements: '主要成就' };
 
   // All genealogies: from Supabase cache
-  const allGenealogies = useMemo(() => {
-    return getSupabaseGenealogies();
-  }, []);
+  const [allGenealogies, setAllGenealogies] = useState(() => getSupabaseGenealogies());
 
   const tabs: { key: TabType; label: string; icon: React.ReactNode; count?: number }[] = [
     { key: 'dashboard', label: '概览', icon: <BarChart3 className="w-4 h-4" /> },
@@ -340,8 +393,10 @@ function AdminPageInner() {
   };
 
   const handleDeleteGenealogy = (id: string) => {
-    deleteCustomGenealogy(id);
-    refreshData();
+    confirmAction('删除族谱', '确定要删除此族谱吗？此操作将同时删除该族谱下的人物数据和介绍内容，不可恢复。', () => {
+      deleteCustomGenealogy(id);
+      refreshData();
+    });
   };
 
   const handleOpenIntroEditor = (genealogyId: string) => {
@@ -370,7 +425,9 @@ function AdminPageInner() {
 
   const handleDeleteAdmin = (id: string) => {
     if (id === 'default') return;
-    deleteAdmin(id); refreshData();
+    confirmAction('删除管理员', '确定要删除此管理员账户吗？此操作不可恢复。', () => {
+      deleteAdmin(id); refreshData();
+    });
   };
 
   const handleToggleAdminStatus = (id: string) => {
@@ -912,6 +969,24 @@ function AdminPageInner() {
             <div className="px-6 py-4 border-t border-border flex gap-3">
               <button onClick={() => setShowIntroEditor(false)} className="flex-1 px-4 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">取消</button>
               <button onClick={handleSaveIntros} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"><Save className="w-4 h-4" />保存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-card border border-border rounded-2xl max-w-md w-full animate-scale-in overflow-hidden">
+            <div className="px-6 py-4 border-b border-border">
+              <h3 className="text-lg font-semibold text-foreground">{confirmDialog.title}</h3>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-muted-foreground">{confirmDialog.message}</p>
+            </div>
+            <div className="px-6 py-4 border-t border-border flex gap-3">
+              <button onClick={() => setConfirmDialog(null)} className="flex-1 px-4 py-2.5 bg-secondary text-secondary-foreground rounded-lg hover:bg-secondary/80 transition-colors">取消</button>
+              <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="flex-1 px-4 py-2.5 bg-destructive text-white rounded-lg hover:bg-destructive/90 transition-colors">确认删除</button>
             </div>
           </div>
         </div>

@@ -134,11 +134,14 @@ export default function GenealogyPage() {
 
   const visibleRange = useMemo(() => {
     if (!selectedPerson) return { minGen: 1, maxGen: 7 };
+    // Dynamically compute max generation from all people
+    const allGens = Object.values(people).map(p => p.generation);
+    const actualMaxGen = allGens.length > 0 ? Math.max(...allGens) : selectedPerson.generation;
     return {
       minGen: Math.max(1, selectedPerson.generation - 3),
-      maxGen: Math.min(15, selectedPerson.generation + 2),
+      maxGen: Math.min(actualMaxGen, selectedPerson.generation + 2),
     };
-  }, [selectedPerson]);
+  }, [selectedPerson, people]);
 
   const treeRoots = useMemo(() => {
     if (!selectedPerson) {
