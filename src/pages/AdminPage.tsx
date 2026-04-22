@@ -364,7 +364,7 @@ function AdminPageInner() {
             </div>
             <div className="flex items-center gap-3">
               <button onClick={refreshData} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-lg hover:bg-secondary"><RefreshCw className="w-4 h-4" />刷新</button>
-              <button onClick={() => { logout(); window.location.reload(); }} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:text-destructive/80 transition-colors rounded-lg hover:bg-destructive/10"><LogOut className="w-4 h-4" />退出</button>
+              <button onClick={() => { logout(); window.location.href = '/'; }} className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-destructive hover:text-destructive/80 transition-colors rounded-lg hover:bg-destructive/10"><LogOut className="w-4 h-4" />退出</button>
             </div>
           </div>
         </div>
