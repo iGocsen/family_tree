@@ -9,6 +9,7 @@ import {
   getCustomGenealogies, saveCustomGenealogy, deleteCustomGenealogy, updateCustomGenealogy,
   getApprovedPersonsByGenealogy, getGenealogyIntroductions, updateGenealogyIntroductions,
   getAdmins, saveAdmin, deleteAdmin, updateAdminStatus,
+  migrateToSupabase,
   type FeedbackRecord, type PersonEdit,
 } from '@/lib/store';
 import { genealogies, getGenealogy, getPerson, getMaxGeneration } from '@/lib/data';
@@ -16,7 +17,7 @@ import {
   ArrowLeft, MessageSquare, Edit3, UserPlus, CheckCircle2, XCircle,
   Trash2, Eye, Search, Filter, BarChart3, Save, AlertTriangle, RefreshCw,
   ArrowUp, ArrowDown, LogIn, LogOut, Lock, User, Pencil, Plus,
-  FileText, KeyRound, UserCog, Shield, ShieldOff,
+  FileText, KeyRound, UserCog, Shield, ShieldOff, Cloud,
 } from 'lucide-react';
 
 type TabType = 'dashboard' | 'feedbacks' | 'edits' | 'new-persons' | 'genealogies' | 'admins';
@@ -111,6 +112,21 @@ function AdminPageInner() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [migrating, setMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState<string | null>(null);
+
+  const handleMigrate = async () => {
+    setMigrating(true);
+    setMigrationResult(null);
+    try {
+      const result = await migrateToSupabase();
+      setMigrationResult(result.message);
+      if (result.success) refreshData();
+    } catch (err: any) {
+      setMigrationResult(`迁移失败: ${err.message}`);
+    }
+    setMigrating(false);
+  };
 
   const refreshData = () => {
     setFeedbacks(getFeedbacks()); setEdits(getPersonEdits()); setNewPersons(getNewPersons());
@@ -398,6 +414,18 @@ function AdminPageInner() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <button onClick={() => { setActiveTab('new-persons'); setShowNewPersonForm(true); setEditingPersonId(null); setFormErrors({}); setNewPersonForm({ genealogyId: '', name: '', generation: 1, birthYear: '', deathYear: '', gender: 'male', spouse: '', parentId: '', biography: '', achievements: '' }); }} className="flex items-center gap-3 p-4 bg-secondary/50 rounded-lg hover:bg-secondary transition-colors text-left"><UserPlus className="w-5 h-5 text-primary" /><div><div className="text-sm font-medium text-foreground">新增人物</div><div className="text-xs text-muted-foreground">添加新的族谱人物记录</div></div></button>
                 <button onClick={() => { setActiveTab('edits'); setShowEditForm(true); }} className="flex items-center gap-3 p-4 bg-secondary/50 rounded-lg hover:bg-secondary transition-colors text-left"><Edit3 className="w-5 h-5 text-accent" /><div><div className="text-sm font-medium text-foreground">修改人物信息</div><div className="text-xs text-muted-foreground">更新现有的人物资料</div></div></button>
+              </div>
+              {migrationResult && (
+                <div className={`mt-4 p-3 rounded-lg text-sm ${migrationResult.startsWith('迁移完成') ? 'bg-green-100 text-green-700' : 'bg-destructive/10 text-destructive'}`}>
+                  {migrationResult}
+                </div>
+              )}
+              <div className="mt-4 pt-4 border-t border-border">
+                <button onClick={handleMigrate} disabled={migrating} className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary rounded-lg hover:bg-primary/20 transition-colors text-sm font-medium disabled:opacity-50">
+                  <RefreshCw className={`w-4 h-4 ${migrating ? 'animate-spin' : ''}`} />
+                  {migrating ? '迁移中...' : '迁移数据到 Supabase'}
+                </button>
+                <p className="text-xs text-muted-foreground mt-2">将本地缓存的族谱、人物、反馈等数据同步到云端数据库</p>
               </div>
             </div>
           </div>

@@ -1,5 +1,7 @@
-import { Person } from '@/lib/data';
-import { supabase, fetchCustomGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud } from './supabase';
+import { Person, genealogies } from '@/lib/data';
+import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, migrateToSupabase as migrateToSupabaseImpl } from './supabase';
+
+export { migrateToSupabaseImpl as migrateToSupabase };
 
 export interface FeedbackRecord {
   id: string; genealogyId: string; genealogyName: string; personId: string; personName: string;
@@ -74,7 +76,7 @@ export function getCurrentUserId(): string | null {
 // ===== Data Refresh =====
 export async function refreshAllData(): Promise<void> {
   const [genealogies, feedbacks, edits, admins] = await Promise.all([
-    fetchCustomGenealogies(),
+    fetchGenealogies(),
     fetchFeedbacks(),
     fetchPersonEdits(),
     fetchAdmins(),
