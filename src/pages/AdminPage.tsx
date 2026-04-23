@@ -90,9 +90,19 @@ function AdminPageInner() {
   const currentUserId = getCurrentUserId();
   const currentUser = getAdmins().find(a => a.id === currentUserId);
   const isSuperAdmin = currentUser?.role === 'super';
-  const canManageAdmins = isSuperAdmin || (currentUser?.editableGenealogies || []).includes('__admin_management__');
+  const isManager = currentUser?.role === 'manager';
+  const isEditor = currentUser?.role === 'editor';
   const editableGenealogyIds = isSuperAdmin ? [] : (currentUser?.editableGenealogies || []);
   const hasGenealogyPermission = (genealogyId: string) => isSuperAdmin || editableGenealogyIds.includes(genealogyId);
+  const canManageAdmins = isSuperAdmin || isManager;
+  // For manager: can only manage admins they created
+  const canManageAdmin = (admin: typeof admins[number]) => {
+    if (isSuperAdmin) return true;
+    if (isManager && admin.createdBy === currentUserId) return true;
+    return false;
+  };
+  // Check if current user can process a record (feedback/edit/newPerson) based on genealogy permission
+  const canProcessRecord = (genealogyId: string) => isSuperAdmin || isManager || editableGenealogyIds.includes(genealogyId);
 
   // Load all data from Supabase on mount
   useEffect(() => {
@@ -141,7 +151,7 @@ function AdminPageInner() {
   // Admin management
   const [admins, setAdmins] = useState(getAdmins());
   const [showAdminForm, setShowAdminForm] = useState(false);
-  const [adminForm, setAdminForm] = useState({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin' as 'super' | 'admin', status: 'active' as 'active' | 'disabled', editableGenealogies: [] as string[] });
+  const [adminForm, setAdminForm] = useState({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager' as 'super' | 'manager' | 'editor', status: 'active' as 'active' | 'disabled', editableGenealogies: [] as string[] });
   const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -348,20 +358,26 @@ function AdminPageInner() {
   const filteredFeedbacks = useMemo(() => feedbacks.filter(f => {
     const ms = !searchTerm || f.personName.toLowerCase().includes(searchTerm.toLowerCase()) || f.genealogyName.toLowerCase().includes(searchTerm.toLowerCase()) || f.description.toLowerCase().includes(searchTerm.toLowerCase());
     const mst = statusFilter === 'all' || f.status === statusFilter;
-    return ms && mst;
-  }), [feedbacks, searchTerm, statusFilter]);
+    // Filter by genealogy permission for non-super admins
+    const hasPerm = isSuperAdmin || editableGenealogyIds.length === 0 || editableGenealogyIds.includes(f.genealogyId);
+    return ms && mst && hasPerm;
+  }), [feedbacks, searchTerm, statusFilter, isSuperAdmin, editableGenealogyIds]);
 
   const filteredEdits = useMemo(() => edits.filter(e => {
     const ms = !searchTerm || e.personName.toLowerCase().includes(searchTerm.toLowerCase()) || e.genealogyName.toLowerCase().includes(searchTerm.toLowerCase());
     const mst = statusFilter === 'all' || e.status === statusFilter;
-    return ms && mst;
-  }), [edits, searchTerm, statusFilter]);
+    // Filter by genealogy permission for non-super admins
+    const hasPerm = isSuperAdmin || editableGenealogyIds.length === 0 || editableGenealogyIds.includes(e.genealogyId);
+    return ms && mst && hasPerm;
+  }), [edits, searchTerm, statusFilter, isSuperAdmin, editableGenealogyIds]);
 
   const filteredNewPersons = useMemo(() => newPersons.filter(p => {
     const ms = !searchTerm || p.name.toLowerCase().includes(searchTerm.toLowerCase());
     const mst = statusFilter === 'all' || p.status === statusFilter;
-    return ms && mst;
-  }), [newPersons, searchTerm, statusFilter]);
+    // Filter by genealogy permission for non-super admins
+    const hasPerm = isSuperAdmin || editableGenealogyIds.length === 0 || editableGenealogyIds.includes(p.genealogyId);
+    return ms && mst && hasPerm;
+  }), [newPersons, searchTerm, statusFilter, isSuperAdmin, editableGenealogyIds]);
 
   const feedbackTypeLabels: Record<string, string> = { 'info-error': '信息有误', 'missing-info': '信息缺失', 'duplicate': '重复记录', 'other': '其他问题' };
   const fieldLabels: Record<string, string> = { name: '姓名', birthYear: '出生年份', deathYear: '逝世年份', biography: '生平介绍', spouse: '配偶', achievements: '主要成就' };
@@ -476,8 +492,15 @@ function AdminPageInner() {
   const handleSaveAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adminForm.username || !adminForm.displayName) return;
-    await saveAdmin({ ...adminForm, id: adminForm.id || undefined });
-    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin', status: 'active', editableGenealogies: [] });
+    const existingAdmin = admins.find(a => a.id === adminForm.id);
+    const adminData = {
+      ...adminForm,
+      id: adminForm.id || undefined,
+      // Preserve createdBy for existing admins, set for new ones
+      createdBy: existingAdmin?.createdBy || (isSuperAdmin || isManager ? currentUserId : undefined),
+    };
+    await saveAdmin(adminData);
+    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager', status: 'active', editableGenealogies: [] });
     setShowAdminForm(false); setEditingAdminId(null);
     // Update local state immediately
     setAdmins(getAdmins());
@@ -491,6 +514,8 @@ function AdminPageInner() {
 
   const handleDeleteAdmin = (id: string) => {
     if (id === 'default') return;
+    // Check permission: super admin can delete anyone, manager can only delete their own
+    if (isManager && !canManageAdmin(admins.find(a => a.id === id)!)) return;
     confirmAction('删除管理员', '确定要删除此管理员账户吗？此操作不可恢复。', async () => {
       // Update local state immediately
       setAdmins(prev => prev.filter(a => a.id !== id));
@@ -501,6 +526,8 @@ function AdminPageInner() {
   const handleToggleAdminStatus = (id: string) => {
     const admin = admins.find(a => a.id === id);
     if (!admin || id === 'default') return;
+    // Check permission: super admin can toggle anyone, manager can only toggle their own
+    if (isManager && !canManageAdmin(admin)) return;
     updateAdminStatus(id, admin.status === 'active' ? 'disabled' : 'active');
     refreshData();
   };
@@ -624,7 +651,7 @@ function AdminPageInner() {
                           {fb.adminNote && <div className="mt-2 p-2 bg-secondary/50 rounded-lg"><p className="text-xs text-muted-foreground">管理员备注：{fb.adminNote}</p></div>}
                         </div>
                         <div className="flex flex-col gap-2">
-                          {fb.status === 'pending' && (<button onClick={() => { setSelectedFeedback(fb); setShowFeedbackDetail(true); setAdminNote(''); }} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs hover:bg-primary/90 transition-colors"><Eye className="w-3.5 h-3.5" />处理</button>)}
+                          {fb.status === 'pending' && canProcessRecord(fb.genealogyId) && (<button onClick={() => { setSelectedFeedback(fb); setShowFeedbackDetail(true); setAdminNote(''); }} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs hover:bg-primary/90 transition-colors"><Eye className="w-3.5 h-3.5" />处理</button>)}
                           <button onClick={() => handleDeleteFeedback(fb.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
                         </div>
                       </div>
@@ -693,7 +720,7 @@ function AdminPageInner() {
                           <p className="text-xs text-muted-foreground mt-3">{new Date(edit.createdAt).toLocaleString('zh-CN')}</p>
                         </div>
                         <div className="flex flex-col gap-2">
-                          {edit.status === 'pending' && (<>
+                          {edit.status === 'pending' && canProcessRecord(edit.genealogyId) && (<>
                             <button onClick={() => handleEditAction(edit.id, 'approved')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs hover:bg-green-700 transition-colors"><CheckCircle2 className="w-3.5 h-3.5" />通过</button>
                             <button onClick={() => handleEditAction(edit.id, 'rejected')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><XCircle className="w-3.5 h-3.5" />驳回</button>
                             <button onClick={() => handleModifyEdit(edit)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
@@ -772,7 +799,7 @@ function AdminPageInner() {
                           <p className="text-xs text-muted-foreground mt-2">{new Date(person.createdAt).toLocaleString('zh-CN')}</p>
                         </div>
                         <div className="flex flex-col gap-2">
-                          {person.status === 'pending' && (<>
+                          {person.status === 'pending' && canProcessRecord(person.genealogyId) && (<>
                             <button onClick={() => handleNewPersonAction(person.id, 'approved')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs hover:bg-green-700 transition-colors"><CheckCircle2 className="w-3.5 h-3.5" />通过</button>
                             <button onClick={() => handleNewPersonAction(person.id, 'rejected')} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><XCircle className="w-3.5 h-3.5" />驳回</button>
                             <button onClick={() => handleModifyNewPerson(person)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
@@ -916,7 +943,7 @@ function AdminPageInner() {
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-foreground">管理员管理</h3>
-              <button onClick={() => { setShowAdminForm(true); setEditingAdminId(null); setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'admin', status: 'active', editableGenealogies: [] }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
+              <button onClick={() => { setShowAdminForm(true); setEditingAdminId(null); setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: [] }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
             </div>
 
             {showAdminForm && (
@@ -929,7 +956,11 @@ function AdminPageInner() {
                     <div><label className="block text-sm font-medium text-foreground mb-1">显示名称 <span className="text-destructive">*</span></label><input type="text" value={adminForm.displayName} onChange={(e) => setAdminForm(prev => ({ ...prev, displayName: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required /></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">备注/介绍</label><textarea value={adminForm.bio} onChange={(e) => setAdminForm(prev => ({ ...prev, bio: e.target.value }))} rows={2} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">联系方式</label><input type="text" value={adminForm.contact} onChange={(e) => setAdminForm(prev => ({ ...prev, contact: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
-                    <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'admin' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="admin">普通管理员</option><option value="super">超级管理员</option></select></div>
+                    <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'manager' | 'editor' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
+                      {isSuperAdmin && <option value="super">超级管理员</option>}
+                      <option value="manager">普通管理员</option>
+                      <option value="editor">族谱修订员</option>
+                    </select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">状态</label><select value={adminForm.status} onChange={(e) => setAdminForm(prev => ({ ...prev, status: e.target.value as 'active' | 'disabled' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="active">启用</option><option value="disabled">停用</option></select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">可编辑族谱（留空=全部）</label>
                       <div className="space-y-2 max-h-40 overflow-y-auto">
@@ -956,7 +987,14 @@ function AdminPageInner() {
             )}
 
             <div className="space-y-3">
-              {admins.map(admin => (
+              {admins
+                .filter(admin => {
+                  // Super admin sees all, manager only sees their own creations + default
+                  if (isSuperAdmin) return true;
+                  if (isManager) return admin.id === 'default' || admin.createdBy === currentUserId;
+                  return false; // Editors can't see admin management at all
+                })
+                .map(admin => (
                 <div key={admin.id} className="bg-card border border-border rounded-xl p-5">
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3">
@@ -965,6 +1003,8 @@ function AdminPageInner() {
                         <div className="flex items-center gap-2">
                           <h4 className="text-sm font-semibold text-foreground">{admin.displayName}</h4>
                           {admin.role === 'super' && <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded">超级管理员</span>}
+                          {admin.role === 'manager' && <span className="text-xs px-1.5 py-0.5 bg-accent/10 text-accent rounded">普通管理员</span>}
+                          {admin.role === 'editor' && <span className="text-xs px-1.5 py-0.5 bg-secondary text-secondary-foreground rounded">族谱修订员</span>}
                           {admin.status === 'disabled' && <span className="text-xs px-1.5 py-0.5 bg-destructive/10 text-destructive rounded">已停用</span>}
                         </div>
                         <p className="text-xs text-muted-foreground">@{admin.username}</p>
@@ -973,9 +1013,10 @@ function AdminPageInner() {
                         {admin.editableGenealogies && admin.editableGenealogies.length > 0 && (
                           <p className="text-xs text-muted-foreground mt-1">可编辑：{admin.editableGenealogies.map(id => allGenealogies.find(g => g.id === id)?.name).filter(Boolean).join('、')}</p>
                         )}
+                        {admin.createdBy && <p className="text-xs text-muted-foreground mt-1">创建者：{admins.find(a => a.id === admin.createdBy)?.displayName || admin.createdBy}</p>}
                       </div>
                     </div>
-                    {admin.id !== 'default' && (
+                    {admin.id !== 'default' && canManageAdmin(admin) && (
                       <div className="flex flex-col gap-2">
                         <button onClick={() => handleEditAdmin(admin)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
                         <button onClick={() => handleToggleAdminStatus(admin.id)} className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors ${admin.status === 'active' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
@@ -1010,8 +1051,8 @@ function AdminPageInner() {
               </div>
               <div><label className="block text-sm font-medium text-foreground mb-1">管理员备注</label><textarea value={adminNote} onChange={(e) => setAdminNote(e.target.value)} placeholder="输入处理说明..." rows={3} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
               <div className="flex gap-3">
-                <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'resolved')} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"><CheckCircle2 className="w-4 h-4" />标记已解决</button>
-                <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'rejected')} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-destructive text-white rounded-lg hover:bg-destructive/90 transition-colors"><XCircle className="w-4 h-4" />驳回</button>
+                <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'resolved')} disabled={!canProcessRecord(selectedFeedback.genealogyId)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><CheckCircle2 className="w-4 h-4" />标记已解决</button>
+                <button onClick={() => handleFeedbackAction(selectedFeedback.id, 'rejected')} disabled={!canProcessRecord(selectedFeedback.genealogyId)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-destructive text-white rounded-lg hover:bg-destructive/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><XCircle className="w-4 h-4" />驳回</button>
               </div>
             </div>
           </div>

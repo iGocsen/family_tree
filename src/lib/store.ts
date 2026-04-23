@@ -29,8 +29,9 @@ export interface CustomGenealogy {
 
 export interface AdminUser {
   id: string; username: string; password: string; displayName: string;
-  bio?: string; contact?: string; role: 'super' | 'admin';
+  bio?: string; contact?: string; role: 'super' | 'manager' | 'editor';
   status: 'active' | 'disabled'; editableGenealogies: string[]; createdAt: string;
+  createdBy?: string; // Track who created this admin (for manager permission scoping)
 }
 
 export interface PersonAddition {
