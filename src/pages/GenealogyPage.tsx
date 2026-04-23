@@ -151,12 +151,18 @@ export default function GenealogyPage() {
 
   const visibleRange = useMemo(() => {
     if (!selectedPerson) return { minGen: 1, maxGen: 7 };
-    // Dynamically compute max generation from all people
+    // Dynamically compute actual min/max generations from all people
     const allGens = Object.values(people).map(p => p.generation);
+    const actualMinGen = allGens.length > 0 ? Math.min(...allGens) : 1;
     const actualMaxGen = allGens.length > 0 ? Math.max(...allGens) : selectedPerson.generation;
+    
+    // For branch genealogies (actualMinGen > 1), use actualMinGen as the base
+    const baseMinGen = Math.max(actualMinGen, selectedPerson.generation - 3);
+    const baseMaxGen = Math.min(actualMaxGen, selectedPerson.generation + 2);
+    
     return {
-      minGen: Math.max(1, selectedPerson.generation - 3),
-      maxGen: Math.min(actualMaxGen, selectedPerson.generation + 2),
+      minGen: baseMinGen,
+      maxGen: Math.max(baseMinGen, baseMaxGen),
     };
   }, [selectedPerson, people]);
 
