@@ -86,6 +86,14 @@ function AdminPageInner() {
   const [adminNote, setAdminNote] = useState('');
   const [showFeedbackDetail, setShowFeedbackDetail] = useState(false);
 
+  // Get current user info
+  const currentUserId = getCurrentUserId();
+  const currentUser = getAdmins().find(a => a.id === currentUserId);
+  const isSuperAdmin = currentUser?.role === 'super';
+  const canManageAdmins = isSuperAdmin || (currentUser?.editableGenealogies || []).includes('__admin_management__');
+  const editableGenealogyIds = isSuperAdmin ? [] : (currentUser?.editableGenealogies || []);
+  const hasGenealogyPermission = (genealogyId: string) => isSuperAdmin || editableGenealogyIds.includes(genealogyId);
+
   // Load all data from Supabase on mount
   useEffect(() => {
     refreshAllData().then(() => {
@@ -368,32 +376,23 @@ function AdminPageInner() {
     { key: 'new-persons', label: '新增人物', icon: <UserPlus className="w-4 h-4" />, count: stats.newPersons.pending },
     { key: 'all-persons', label: '人物管理', icon: <User className="w-4 h-4" /> },
     { key: 'genealogies', label: '族谱管理', icon: <Plus className="w-4 h-4" /> },
-    { key: 'admins', label: '管理员', icon: <UserCog className="w-4 h-4" /> },
+    ...(canManageAdmins ? [{ key: 'admins' as TabType, label: '管理员', icon: <UserCog className="w-4 h-4" /> }] : []),
   ];
 
   const selectedGenealogy = allGenealogies.find(g => g.id === newPersonForm.genealogyId);
   const selectedGenealogyForEdit = allGenealogies.find(g => g.id === editForm.genealogyId);
-  const basePersons = selectedGenealogyForEdit ? Object.values(selectedGenealogyForEdit.people) : [];
-  const approvedPersonsForEdit = getApprovedPersonsByGenealogy(editForm.genealogyId);
-  const availablePersons = [...basePersons, ...approvedPersonsForEdit.map(ap => ({
-    id: ap.id, name: ap.name, generation: ap.generation,
-    birthYear: ap.birthYear, deathYear: ap.deathYear,
-    gender: ap.gender as 'male' | 'female',
-    biography: ap.biography,
-    achievements: ap.achievements ? ap.achievements.split('\n').filter((a: string) => a.trim()) : undefined,
-    parentId: ap.parentId,
-    spouse: ap.spouse,
-  } as any))];
-
+  // Use getPeopleByGenealogy directly to avoid duplication
+  const availablePersons = editForm.genealogyId ? getPeopleByGenealogy(editForm.genealogyId) : [];
   const availableParents = useMemo(() => {
     if (!selectedGenealogy || newPersonForm.generation <= 1) return [];
-    return Object.values(selectedGenealogy.people).filter(p => p.generation === newPersonForm.generation - 1);
-  }, [selectedGenealogy, newPersonForm.generation]);
+    return getPeopleByGenealogy(newPersonForm.genealogyId).filter(p => p.generation === newPersonForm.generation - 1);
+  }, [selectedGenealogy, newPersonForm.generation, newPersonForm.genealogyId]);
 
+  // Approved new persons that can also be selected as parents
   const approvedParents = useMemo(() => {
-    if (!newPersonForm.genealogyId || newPersonForm.generation <= 1) return [];
-    return getApprovedPersonsByGenealogy(newPersonForm.genealogyId).filter(p => p.generation === newPersonForm.generation - 1);
-  }, [newPersonForm.genealogyId, newPersonForm.generation]);
+    if (!newPersonForm.genealogyId) return [];
+    return newPersons.filter(p => p.genealogyId === newPersonForm.genealogyId && p.status === 'approved');
+  }, [newPersons, newPersonForm.genealogyId]);
 
   useEffect(() => {
     if (newPersonForm.parentId && selectedGenealogy) {
@@ -652,7 +651,7 @@ function AdminPageInner() {
                   <div className="px-6 py-4 border-b border-border flex items-center justify-between"><h3 className="text-lg font-semibold text-foreground">{editingEditId ? '修改审核记录' : '新增人物修改'}</h3><button onClick={() => { setShowEditForm(false); setEditingEditId(null); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-secondary transition-colors"><XCircle className="w-4 h-4 text-muted-foreground" /></button></div>
                   <form onSubmit={editingEditId ? handleSaveEditModification : handleSubmitEdit} className="p-6 space-y-4">
                     <div><label className="block text-sm font-medium text-foreground mb-1">选择族谱</label><select value={editForm.genealogyId} onChange={(e) => setEditForm(prev => ({ ...prev, genealogyId: e.target.value, personId: '', oldValue: '' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required>
-                      <option value="">请选择族谱</option>{allGenealogies.map(g => (<option key={g.id} value={g.id}>{g.name}</option>))}
+                      <option value="">请选择族谱</option>{allGenealogies.filter(g => hasGenealogyPermission(g.id)).map(g => (<option key={g.id} value={g.id}>{g.name}</option>))}
                     </select></div>
                     {editForm.genealogyId && (<>
                       <div><label className="block text-sm font-medium text-foreground mb-1">选择人物</label><select value={editForm.personId} onChange={(e) => handlePersonSelect(e.target.value)} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required>
@@ -725,7 +724,7 @@ function AdminPageInner() {
                   <div className="px-6 py-4 border-b border-border flex items-center justify-between sticky top-0 bg-card z-10"><h3 className="text-lg font-semibold text-foreground">{editingPersonId ? '修改人物' : '新增人物'}</h3><button onClick={() => { setShowNewPersonForm(false); setEditingPersonId(null); setFormErrors({}); }} className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-secondary transition-colors"><XCircle className="w-4 h-4 text-muted-foreground" /></button></div>
                   <form onSubmit={handleSubmitNewPerson} className="p-6 space-y-4">
                     <div><label className="block text-sm font-medium text-foreground mb-1">选择族谱 <span className="text-destructive">*</span></label><select value={newPersonForm.genealogyId} onChange={(e) => setNewPersonForm(prev => ({ ...prev, genealogyId: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required>
-                      <option value="">请选择族谱</option>{allGenealogies.map(g => (<option key={g.id} value={g.id}>{g.name}</option>))}
+                      <option value="">请选择族谱</option>{allGenealogies.filter(g => hasGenealogyPermission(g.id)).map(g => (<option key={g.id} value={g.id}>{g.name}</option>))}
                     </select>{formErrors.genealogyId && <p className="text-xs text-destructive mt-1">{formErrors.genealogyId}</p>}</div>
                     {newPersonForm.genealogyId && (<>
                       <div className="grid grid-cols-2 gap-4">
@@ -816,6 +815,7 @@ function AdminPageInner() {
               <div className="space-y-6">
                 {Object.entries(allPersons).map(([genealogyId, persons]) => {
                   const genealogy = getSupabaseGenealogies().find(g => g.id === genealogyId);
+                  const hasPermission = hasGenealogyPermission(genealogyId);
                   const filteredPersons = persons.filter(p => {
                     const matchSearch = !searchTerm || p.name.toLowerCase().includes(searchTerm.toLowerCase());
                     const matchStatus = statusFilter === 'all' || (p as any).status === statusFilter || (statusFilter === 'approved' && !(p as any).status);
@@ -823,9 +823,9 @@ function AdminPageInner() {
                   });
                   if (filteredPersons.length === 0) return null;
                   return (
-                    <div key={genealogyId} className="bg-card border border-border rounded-xl overflow-hidden">
+                    <div key={genealogyId} className={`bg-card border border-border rounded-xl overflow-hidden ${!hasPermission ? 'opacity-60' : ''}`}>
                       <div className="px-6 py-4 border-b border-border bg-secondary/30">
-                        <h3 className="text-lg font-semibold text-foreground">{genealogy?.name || genealogyId}（{filteredPersons.length} 人）</h3>
+                        <h3 className="text-lg font-semibold text-foreground">{genealogy?.name || genealogyId}（{filteredPersons.length} 人）{!hasPermission && <span className="text-xs text-muted-foreground ml-2">无权限</span>}</h3>
                       </div>
                       <div className="divide-y divide-border">
                         {filteredPersons.sort((a, b) => a.generation - b.generation).map(p => (
@@ -840,7 +840,7 @@ function AdminPageInner() {
                             <div className="flex items-center gap-2">
                               {(p as any).status === 'pending' && <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full">待审核</span>}
                               {p.parentId && <span className="text-xs text-muted-foreground">父ID: {p.parentId}</span>}
-                              <button onClick={() => handleDeletePerson(genealogyId, p.id)} className="inline-flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3 h-3" />删除</button>
+                              <button onClick={() => hasPermission && handleDeletePerson(genealogyId, p.id)} disabled={!hasPermission} className="inline-flex items-center gap-1 px-2 py-1 bg-destructive/10 text-destructive rounded text-xs hover:bg-destructive/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 className="w-3 h-3" />删除</button>
                             </div>
                           </div>
                         ))}
@@ -879,15 +879,17 @@ function AdminPageInner() {
 
             <div className="space-y-3">
               {allGenealogies.map(g => {
+                const hasPermission = hasGenealogyPermission(g.id);
                 const allG = getSupabaseGenealogies();
                 const mergedG = getGenealogy(g.id);
                 const personCount = mergedG ? Object.keys(mergedG.people).length : 0;
                 return (
-                  <div key={g.id} className="bg-card border border-border rounded-xl p-5">
+                  <div key={g.id} className={`bg-card border border-border rounded-xl p-5 ${!hasPermission ? 'opacity-60' : ''}`}>
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <h4 className="text-lg font-semibold text-foreground">{g.name}</h4>
+                          {!hasPermission && <span className="text-xs px-2 py-0.5 bg-muted text-muted-foreground rounded-full">无权限</span>}
                         </div>
                         <p className="text-sm text-muted-foreground mb-2">{g.description}</p>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -897,9 +899,9 @@ function AdminPageInner() {
                         </div>
                       </div>
                       <div className="flex flex-col gap-2">
-                        <button onClick={() => handleEditGenealogy(g)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors"><Pencil className="w-3.5 h-3.5" />修改</button>
-                        <button onClick={() => handleOpenIntroEditor(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs hover:bg-primary/20 transition-colors"><FileText className="w-3.5 h-3.5" />{getGenealogyIntroductions(g.id).length > 0 ? '修改更多介绍' : '创建更多介绍'}</button>
-                        <button onClick={() => handleDeleteGenealogy(g.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        <button onClick={() => hasPermission && handleEditGenealogy(g)} disabled={!hasPermission} className="inline-flex items-center gap-1 px-3 py-1.5 bg-accent/10 text-accent rounded-lg text-xs hover:bg-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Pencil className="w-3.5 h-3.5" />修改</button>
+                        <button onClick={() => hasPermission && handleOpenIntroEditor(g.id)} disabled={!hasPermission} className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary/10 text-primary rounded-lg text-xs hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><FileText className="w-3.5 h-3.5" />{getGenealogyIntroductions(g.id).length > 0 ? '修改更多介绍' : '创建更多介绍'}</button>
+                        <button onClick={() => hasPermission && handleDeleteGenealogy(g.id)} disabled={!hasPermission} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"><Trash2 className="w-3.5 h-3.5" />删除</button>
                       </div>
                     </div>
                   </div>
