@@ -1,5 +1,5 @@
 import { Person, setSupabaseCache, Genealogy } from '@/lib/data';
-import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl, fetchGenealogyIntroductions, saveGenealogyIntroductions, deleteGenealogyIntroductions, fetchPersonAdditions, approvePersonAddition, rejectPersonAddition, savePersonAddition } from './supabase';
+import { supabase, fetchGenealogies, saveGenealogyToCloud, deleteGenealogyFromCloud, fetchPeople, fetchAllPeople, savePersonToCloud, deletePersonFromCloud, fetchFeedbacks, saveFeedbackToCloud, deleteFeedbackFromCloud, fetchPersonEdits, saveEditToCloud, deleteEditFromCloud, fetchAdmins, saveAdminToCloud, deleteAdminFromCloud, seedBaseData, migrateToSupabase as migrateToSupabaseImpl, fetchGenealogyIntroductions, fetchAllGenealogyIntroductions, saveGenealogyIntroductions, deleteGenealogyIntroductions, fetchPersonAdditions, approvePersonAddition, rejectPersonAddition, savePersonAddition } from './supabase';
 
 export { seedBaseData, migrateToSupabaseImpl as migrateToSupabase };
 
@@ -147,13 +147,12 @@ export async function refreshAllData(): Promise<void> {
     achievements: pa.achievements || '', status: pa.status || 'pending', createdAt: pa.created_at,
   }));
 
-  // Fetch introductions for each genealogy
+  // Fetch introductions for all genealogies in a single batch query
+  const allIntros = await fetchAllGenealogyIntroductions();
   introductionsCache = {};
   for (const g of genealogiesData) {
-    try {
-      const intruPages = await fetchGenealogyIntroductions(g.id);
-      introductionsCache[g.id] = intruPages.map((p: any) => p.content);
-    } catch { /* ignore */ }
+    const pages = allIntros[g.id] || [];
+    introductionsCache[g.id] = pages.map((p: any) => p.content);
   }
 
   // Set the Supabase cache in data.ts
@@ -183,7 +182,7 @@ export async function refreshAllData(): Promise<void> {
     id: a.id, username: a.username, password: a.password_hash,
     displayName: a.display_name, bio: a.bio, contact: a.contact,
     role: a.role, status: a.status, editableGenealogies: a.editable_genealogies || [],
-    createdAt: a.created_at,
+    createdAt: a.created_at, createdBy: a.created_by,
   }));
 
   isInitialized = true;
@@ -481,23 +480,50 @@ export function getStats() {
 }
 
 // ===== Admin Management =====
+const ADMIN_CREATION_KEY = 'genealogy_admin_creation_map';
+
+// Get admin creation mapping from localStorage
+function getAdminCreationMap(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(ADMIN_CREATION_KEY) || '{}');
+  } catch { return {}; }
+}
+
+// Persist admin creation relationship to localStorage
+function setAdminCreatedBy(adminId: string, creatorId: string): void {
+  const map = getAdminCreationMap();
+  map[adminId] = creatorId;
+  localStorage.setItem(ADMIN_CREATION_KEY, JSON.stringify(map));
+}
+
 function getDefaultAdmins(): AdminUser[] {
   return [{ id: 'default', username: 'admin', password: 'password', displayName: '超级管理员', role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString() }];
 }
 
 export function getAdmins(): AdminUser[] {
-  return [...getDefaultAdmins(), ...adminsCache.filter(a => a.id !== 'default')];
+  const creationMap = getAdminCreationMap();
+  return [...getDefaultAdmins(), ...adminsCache.filter(a => a.id !== 'default').map(a => ({
+    ...a,
+    // Use Supabase createdBy if available, fallback to localStorage
+    createdBy: a.createdBy || creationMap[a.id],
+  }))];
 }
 
 export async function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<AdminUser> {
   const newAdmin: AdminUser = { ...admin, id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, createdAt: admin.createdAt || new Date().toISOString() };
   const idx = adminsCache.findIndex(a => a.id === newAdmin.id);
   if (idx >= 0) adminsCache[idx] = newAdmin; else adminsCache.push(newAdmin);
+  
+  // Persist createdBy to localStorage as fallback (in case Supabase doesn't have created_by column)
+  if (newAdmin.createdBy) {
+    setAdminCreatedBy(newAdmin.id, newAdmin.createdBy);
+  }
+  
   await saveAdminToCloud({
     id: newAdmin.id, username: newAdmin.username, password_hash: newAdmin.password,
     display_name: newAdmin.displayName, bio: newAdmin.bio || null, contact: newAdmin.contact || null,
     role: newAdmin.role, status: newAdmin.status, editable_genealogies: newAdmin.editableGenealogies,
-    created_at: newAdmin.createdAt,
+    created_at: newAdmin.createdAt, created_by: newAdmin.createdBy || null,
   });
   return newAdmin;
 }
@@ -515,8 +541,8 @@ export async function updateAdminStatus(id: string, status: 'active' | 'disabled
   await saveAdminToCloud({
     id, username: adminsCache[idx]?.username || '', password_hash: adminsCache[idx]?.password || '',
     display_name: adminsCache[idx]?.displayName || '', bio: adminsCache[idx]?.bio || null,
-    contact: adminsCache[idx]?.contact || null, role: adminsCache[idx]?.role || 'admin',
+    contact: adminsCache[idx]?.contact || null, role: adminsCache[idx]?.role || 'manager',
     status, editable_genealogies: adminsCache[idx]?.editableGenealogies || [],
-    created_at: adminsCache[idx]?.createdAt || '',
+    created_at: adminsCache[idx]?.createdAt || '', created_by: adminsCache[idx]?.createdBy || null,
   });
 }

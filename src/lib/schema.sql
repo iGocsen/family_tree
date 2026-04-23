@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS genealogies (
   description TEXT DEFAULT '',
   origin TEXT DEFAULT '',
   founding_year TEXT DEFAULT '',
+  ancestor JSONB,
   is_base BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -33,12 +34,12 @@ CREATE TABLE IF NOT EXISTS people (
   generation INTEGER NOT NULL,
   birth_year TEXT DEFAULT '',
   death_year TEXT DEFAULT '',
-  gender TEXT NOT NULL DEFAULT 'male',
+  gender TEXT NOT NULL DEFAULT 'male' CHECK (gender IN ('male', 'female')),
   spouse TEXT DEFAULT '',
   parent_id TEXT DEFAULT '',
   biography TEXT DEFAULT '',
   achievements TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'approved',
+  status TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'rejected')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -50,12 +51,12 @@ CREATE TABLE IF NOT EXISTS person_add (
   generation INTEGER NOT NULL,
   birth_year TEXT DEFAULT '',
   death_year TEXT DEFAULT '',
-  gender TEXT NOT NULL DEFAULT 'male',
+  gender TEXT NOT NULL DEFAULT 'male' CHECK (gender IN ('male', 'female')),
   spouse TEXT DEFAULT '',
   parent_id TEXT DEFAULT '',
   biography TEXT DEFAULT '',
   achievements TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -69,7 +70,7 @@ CREATE TABLE IF NOT EXISTS person_edits (
   field TEXT NOT NULL,
   old_value TEXT NOT NULL,
   new_value TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -82,10 +83,10 @@ CREATE TABLE IF NOT EXISTS feedbacks (
   person_name TEXT NOT NULL,
   person_generation INTEGER DEFAULT 0,
   person_biography TEXT DEFAULT '',
-  feedback_type TEXT NOT NULL,
+  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('info-error', 'missing-info', 'duplicate', 'other')),
   description TEXT NOT NULL,
   contact TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
   admin_note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at TIMESTAMPTZ
@@ -99,23 +100,29 @@ CREATE TABLE IF NOT EXISTS admins (
   display_name TEXT NOT NULL,
   bio TEXT,
   contact TEXT,
-  role TEXT NOT NULL DEFAULT 'admin',
-  status TEXT NOT NULL DEFAULT 'active',
+  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('super', 'manager', 'editor')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   editable_genealogies JSONB DEFAULT '[]'::jsonb,
+  created_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ===== Indexes for Performance =====
 CREATE INDEX IF NOT EXISTS idx_people_genealogy ON people(genealogy_id);
-CREATE INDEX IF NOT EXISTS idx_people_generation ON people(generation);
-CREATE INDEX IF NOT EXISTS idx_people_status ON people(status);
+CREATE INDEX IF NOT EXISTS idx_people_generation ON people(genealogy_id, generation);
+CREATE INDEX IF NOT EXISTS idx_people_status ON people(genealogy_id, status);
 CREATE INDEX IF NOT EXISTS idx_person_add_genealogy ON person_add(genealogy_id);
+CREATE INDEX IF NOT EXISTS idx_people_genealogy_id ON people(genealogy_id);
+CREATE INDEX IF NOT EXISTS idx_people_parent_id ON people(parent_id);
 CREATE INDEX IF NOT EXISTS idx_person_add_status ON person_add(status);
+CREATE INDEX IF NOT EXISTS idx_person_edits_status ON person_edits(status);
+CREATE INDEX IF NOT EXISTS idx_person_edits_genealogy ON person_edits(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_gnlogy_intru_genealogy ON gnlogy_intru(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_status ON feedbacks(status);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_genealogy ON feedbacks(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_person_edits_status ON person_edits(status);
 CREATE INDEX IF NOT EXISTS idx_admins_username ON admins(username);
+CREATE INDEX IF NOT EXISTS idx_admins_created_by ON admins(created_by);
 
 -- ===== Row Level Security (RLS) =====
 ALTER TABLE genealogies ENABLE ROW LEVEL SECURITY;
@@ -150,8 +157,33 @@ VALUES ('default', 'admin', 'password', '超级管理员', 'super', 'active', '[
 ON CONFLICT (id) DO NOTHING;
 
 -- ===== Insert Base Genealogies =====
-INSERT INTO genealogies (id, name, description, origin, founding_year, is_base, created_at) VALUES
-('li', '李氏族谱', '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', '福建漳州 → 广东潮州', '1680', true, NOW()),
-('zhang', '张氏族谱', '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', '江西 → 湖南长沙', '1690', true, NOW()),
-('chen', '陈氏族谱', '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', '河南 → 四川成都', '1700', true, NOW())
-ON CONFLICT (id) DO NOTHING;
+-- INSERT INTO genealogies (id, name, description, origin, founding_year, is_base, created_at) VALUES
+-- ('li', '李氏族谱', '李氏一族自清康熙年间由福建漳州迁居广东潮州，以耕读传家，历经九代，枝繁叶茂。族中人才辈出，涵盖仕宦、教育、商业、医学等诸多领域。', '福建漳州 → 广东潮州', '1680', true, NOW()),
+-- ('zhang', '张氏族谱', '张氏一族自清康熙末年自江西迁居湖南长沙，以耕读为业。九代传承，族中涌现众多杰出人物，涵盖外交、科学、文学、艺术、医学等领域。', '江西 → 湖南长沙', '1690', true, NOW()),
+-- ('chen', '陈氏族谱', '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', '河南 → 四川成都', '1700', true, NOW())
+-- ON CONFLICT (id) DO NOTHING;
+
+-- ==========================================
+-- 已有数据库迁移：添加缺失的列
+-- ==========================================
+
+-- 添加 created_by 列（如果不存在）
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'admins' AND column_name = 'created_by'
+  ) THEN
+    ALTER TABLE admins ADD COLUMN created_by TEXT;
+  END IF;
+END $$;
+
+-- 创建 created_by 索引（如果不存在）
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes WHERE indexname = 'idx_admins_created_by'
+  ) THEN
+    CREATE INDEX idx_admins_created_by ON admins(created_by);
+  END IF;
+END $$;

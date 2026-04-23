@@ -88,21 +88,62 @@ function AdminPageInner() {
 
   // Get current user info
   const currentUserId = getCurrentUserId();
-  const currentUser = getAdmins().find(a => a.id === currentUserId);
+  const allAdmins = getAdmins();
+  const currentUser = allAdmins.find(a => a.id === currentUserId);
   const isSuperAdmin = currentUser?.role === 'super';
   const isManager = currentUser?.role === 'manager';
   const isEditor = currentUser?.role === 'editor';
-  const editableGenealogyIds = isSuperAdmin ? [] : (currentUser?.editableGenealogies || []);
+
+  // ===== Permission Inheritance Logic =====
+  // For super admin: has all permissions
+  // For manager: effective genealogy permission = their editableGenealogies + all genealogies they created (directly or indirectly through sub-managers)
+  // For editor: effective genealogy permission = only their editableGenealogies
+  const getEffectiveGenealogyIds = (adminId: string): string[] => {
+    const admin = allAdmins.find(a => a.id === adminId);
+    if (!admin) return [];
+    if (admin.role === 'super') return []; // empty means all
+    
+    // Start with own editable genealogies
+    let ids = new Set<string>(admin.editableGenealogies || []);
+    
+    // If manager, also include all genealogies created by admins they created (recursive)
+    if (admin.role === 'manager') {
+      const collectDescendantGenealogies = (parentId: string) => {
+        const children = allAdmins.filter(a => a.createdBy === parentId);
+        for (const child of children) {
+          (child.editableGenealogies || []).forEach(id => ids.add(id));
+          // Recursively collect from descendants
+          collectDescendantGenealogies(child.id);
+        }
+      };
+      collectDescendantGenealogies(adminId);
+    }
+    
+    return Array.from(ids);
+  };
+
+  const editableGenealogyIds = isSuperAdmin ? [] : getEffectiveGenealogyIds(currentUserId);
   const hasGenealogyPermission = (genealogyId: string) => isSuperAdmin || editableGenealogyIds.includes(genealogyId);
   const canManageAdmins = isSuperAdmin || isManager;
-  // For manager: can only manage admins they created
+  
+  // For manager: can only manage admins they created directly
   const canManageAdmin = (admin: typeof admins[number]) => {
     if (isSuperAdmin) return true;
     if (isManager && admin.createdBy === currentUserId) return true;
     return false;
   };
+  
   // Check if current user can process a record (feedback/edit/newPerson) based on genealogy permission
-  const canProcessRecord = (genealogyId: string) => isSuperAdmin || isManager || editableGenealogyIds.includes(genealogyId);
+  // Super admin: all; Manager: their effective genealogy scope; Editor: only their editable genealogies
+  const canProcessRecord = (genealogyId: string) => {
+    if (isSuperAdmin) return true;
+    if (isManager) {
+      // Manager can process records in their effective genealogy scope
+      return editableGenealogyIds.includes(genealogyId);
+    }
+    // Editor: only their own editable genealogies
+    return editableGenealogyIds.includes(genealogyId);
+  };
 
   // Load all data from Supabase on mount
   useEffect(() => {
@@ -435,6 +476,7 @@ function AdminPageInner() {
   const handleSaveGenealogy = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!genealogyForm.id || !genealogyForm.name) return;
+    if (isEditor) return; // Editors cannot create/modify genealogies
     const allG = getSupabaseGenealogies();
     const existingIdx = allG.findIndex(g => g.id === genealogyForm.id);
     
@@ -458,18 +500,42 @@ function AdminPageInner() {
       await saveCustomGenealogy({ ...genealogyForm, introductions: [] });
       // Update local state immediately
       setAllGenealogies(prev => [...prev, newGenealogy]);
+      
+      // If current user is not super admin and not default, auto-add new genealogy to their permissions
+      if (currentUserId && currentUserId !== 'default') {
+        const currentAdmin = admins.find(a => a.id === currentUserId);
+        if (currentAdmin && !currentAdmin.editableGenealogies.includes(genealogyForm.id)) {
+          const updatedGenealogies = [...(currentAdmin.editableGenealogies || []), genealogyForm.id];
+          // Save to cloud (will handle missing created_by gracefully)
+          await saveAdmin({ ...currentAdmin, editableGenealogies: updatedGenealogies });
+          // Update local React state
+          setAdmins(prev => prev.map(a => a.id === currentUserId ? { ...a, editableGenealogies: updatedGenealogies } : a));
+        }
+      }
     }
     setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' });
     setShowGenealogyForm(false); setEditingGenealogyId(null);
-    await refreshData();
+    
+    // Only refresh genealogies, people, and stats — NOT admins (to preserve permission updates)
+    await refreshAllData();
+    setAllGenealogies(getSupabaseGenealogies());
+    const genealogies = getSupabaseGenealogies();
+    const personsMap: Record<string, Person[]> = {};
+    for (const g of genealogies) {
+      personsMap[g.id] = getPeopleByGenealogy(g.id);
+    }
+    setAllPersons(personsMap);
+    setStats(getStats());
   };
 
   const handleEditGenealogy = (g: any) => {
+    if (isEditor) return; // Editors cannot modify genealogies
     setGenealogyForm({ id: g.id, name: g.name, description: g.description, origin: g.origin, foundingYear: g.foundingYear });
     setEditingGenealogyId(g.id); setShowGenealogyForm(true);
   };
 
   const handleDeleteGenealogy = (id: string) => {
+    if (isEditor) return; // Editors cannot delete genealogies
     confirmAction('删除族谱', '确定要删除此族谱吗？此操作将同时删除该族谱下的人物数据和介绍内容，不可恢复。', async () => {
       // Update local state immediately
       setAllGenealogies(prev => prev.filter(g => g.id !== id));
@@ -499,12 +565,42 @@ function AdminPageInner() {
       // Preserve createdBy for existing admins, set for new ones
       createdBy: existingAdmin?.createdBy || (isSuperAdmin || isManager ? currentUserId : undefined),
     };
-    await saveAdmin(adminData);
-    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager', status: 'active', editableGenealogies: [] });
+    const saved = await saveAdmin(adminData);
+    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: [] });
     setShowAdminForm(false); setEditingAdminId(null);
-    // Update local state immediately
-    setAdmins(getAdmins());
-    await refreshData();
+    
+    // Update local state immediately with the saved admin (including createdBy)
+    // IMPORTANT: We merge with existing admins to preserve createdBy that may not be in Supabase yet
+    setAdmins(prev => {
+      const idx = prev.findIndex(a => a.id === saved.id);
+      const merged = { ...saved };
+      // Preserve createdBy from existing record if Supabase didn't return it
+      if (!merged.createdBy) {
+        const existing = prev.find(a => a.id === saved.id);
+        if (existing?.createdBy) merged.createdBy = existing.createdBy;
+      }
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = merged;
+        return updated;
+      }
+      return [...prev, merged];
+    });
+    
+    // Refresh other data but preserve admins state
+    await refreshAllData();
+    setFeedbacks(getFeedbacks());
+    setEdits(getPersonEdits());
+    setNewPersons(getNewPersons());
+    setStats(getStats());
+    // Refresh genealogies and people
+    const genealogies = getSupabaseGenealogies();
+    setAllGenealogies(genealogies);
+    const personsMap: Record<string, Person[]> = {};
+    for (const g of genealogies) {
+      personsMap[g.id] = getPeopleByGenealogy(g.id);
+    }
+    setAllPersons(personsMap);
   };
 
   const handleEditAdmin = (a: any) => {
@@ -885,7 +981,7 @@ function AdminPageInner() {
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-foreground">族谱管理</h3>
-              <button onClick={() => { setShowGenealogyForm(true); setEditingGenealogyId(null); setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><Plus className="w-4 h-4" />新增族谱</button>
+              {!isEditor && <button onClick={() => { setShowGenealogyForm(true); setEditingGenealogyId(null); setGenealogyForm({ id: '', name: '', description: '', origin: '', foundingYear: '' }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><Plus className="w-4 h-4" />新增族谱</button>}
             </div>
 
             {showGenealogyForm && (
@@ -943,7 +1039,13 @@ function AdminPageInner() {
           <div className="space-y-6 animate-fade-in">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-foreground">管理员管理</h3>
-              <button onClick={() => { setShowAdminForm(true); setEditingAdminId(null); setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: [] }); }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
+              <button onClick={() => {
+                setShowAdminForm(true); setEditingAdminId(null);
+                // Super admin creating a manager: empty genealogy permissions (no inheritance)
+                // Manager creating an admin: inherit their own genealogy permissions
+                const defaultGenealogies = isManager ? editableGenealogyIds : [];
+                setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: defaultGenealogies });
+              }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
             </div>
 
             {showAdminForm && (
@@ -964,11 +1066,13 @@ function AdminPageInner() {
                     <div><label className="block text-sm font-medium text-foreground mb-1">状态</label><select value={adminForm.status} onChange={(e) => setAdminForm(prev => ({ ...prev, status: e.target.value as 'active' | 'disabled' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="active">启用</option><option value="disabled">停用</option></select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">可编辑族谱（留空=全部）</label>
                       <div className="space-y-2 max-h-40 overflow-y-auto">
-                        {allGenealogies.map(g => (
+                        {allGenealogies
+                          .filter(g => isSuperAdmin || editableGenealogyIds.includes(g.id))
+                          .map(g => (
                           <label key={g.id} className="flex items-center gap-2 text-sm">
                             <input type="checkbox" checked={adminForm.editableGenealogies.length === 0 || adminForm.editableGenealogies.includes(g.id)} onChange={(e) => {
                               if (adminForm.editableGenealogies.length === 0) {
-                                setAdminForm(prev => ({ ...prev, editableGenealogies: allGenealogies.map(x => x.id).filter(id => id !== g.id) }));
+                                setAdminForm(prev => ({ ...prev, editableGenealogies: allGenealogies.filter(x => isSuperAdmin || editableGenealogyIds.includes(x.id)).map(x => x.id).filter(id => id !== g.id) }));
                               } else if (e.target.checked) {
                                 setAdminForm(prev => ({ ...prev, editableGenealogies: [...prev.editableGenealogies, g.id] }));
                               } else {
@@ -989,13 +1093,15 @@ function AdminPageInner() {
             <div className="space-y-3">
               {admins
                 .filter(admin => {
-                  // Super admin sees all, manager only sees their own creations + default
+                  // Super admin sees all, manager sees themselves + their creations
                   if (isSuperAdmin) return true;
-                  if (isManager) return admin.id === 'default' || admin.createdBy === currentUserId;
+                  if (isManager) return admin.id === currentUserId || admin.createdBy === currentUserId;
                   return false; // Editors can't see admin management at all
                 })
-                .map(admin => (
-                <div key={admin.id} className="bg-card border border-border rounded-xl p-5">
+                .map(admin => {
+                  const isCurrentUser = admin.id === currentUserId;
+                  return (
+                <div key={admin.id} className={`bg-card border border-border rounded-xl p-5 ${isCurrentUser ? 'ring-2 ring-primary/20' : ''}`}>
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3">
                       <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-bold text-primary">{admin.displayName.charAt(0)}</div>
@@ -1006,6 +1112,7 @@ function AdminPageInner() {
                           {admin.role === 'manager' && <span className="text-xs px-1.5 py-0.5 bg-accent/10 text-accent rounded">普通管理员</span>}
                           {admin.role === 'editor' && <span className="text-xs px-1.5 py-0.5 bg-secondary text-secondary-foreground rounded">族谱修订员</span>}
                           {admin.status === 'disabled' && <span className="text-xs px-1.5 py-0.5 bg-destructive/10 text-destructive rounded">已停用</span>}
+                          {isCurrentUser && <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded">当前账号</span>}
                         </div>
                         <p className="text-xs text-muted-foreground">@{admin.username}</p>
                         {admin.bio && <p className="text-xs text-muted-foreground mt-1">{admin.bio}</p>}
@@ -1022,12 +1129,16 @@ function AdminPageInner() {
                         <button onClick={() => handleToggleAdminStatus(admin.id)} className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs transition-colors ${admin.status === 'active' ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
                           {admin.status === 'active' ? <><ShieldOff className="w-3.5 h-3.5" />停用</> : <><Shield className="w-3.5 h-3.5" />启用</>}
                         </button>
-                        <button onClick={() => handleDeleteAdmin(admin.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        {isCurrentUser ? (
+                          <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-secondary/50 text-muted-foreground rounded-lg text-xs cursor-default"><User className="w-3.5 h-3.5" />当前账号</span>
+                        ) : (
+                          <button onClick={() => handleDeleteAdmin(admin.id)} className="inline-flex items-center gap-1 px-3 py-1.5 bg-destructive/10 text-destructive rounded-lg text-xs hover:bg-destructive/20 transition-colors"><Trash2 className="w-3.5 h-3.5" />删除</button>
+                        )}
                       </div>
                     )}
                   </div>
                 </div>
-              ))}
+              );})}
             </div>
           </div>
         )}

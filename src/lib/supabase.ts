@@ -37,6 +37,22 @@ export async function fetchGenealogyIntroductions(genealogyId: string): Promise<
   return data || [];
 }
 
+export async function fetchAllGenealogyIntroductions(): Promise<Record<string, any[]>> {
+  // Fetch all introductions in one query instead of per-genealogy
+  const { data, error } = await supabase
+    .from('gnlogy_intru')
+    .select('*')
+    .order('page_number', { ascending: true });
+  if (error) { console.error('Failed to fetch all introductions:', error); return {}; }
+  // Group by genealogy_id
+  const result: Record<string, any[]> = {};
+  (data || []).forEach(item => {
+    if (!result[item.genealogy_id]) result[item.genealogy_id] = [];
+    result[item.genealogy_id].push(item);
+  });
+  return result;
+}
+
 export async function saveGenealogyIntroductions(genealogyId: string, pages: string[]): Promise<void> {
   // Delete existing pages first
   await supabase.from('gnlogy_intru').delete().eq('genealogy_id', genealogyId);
@@ -70,9 +86,24 @@ export async function fetchPeople(genealogyId?: string): Promise<any[]> {
 }
 
 export async function fetchAllPeople(): Promise<any[]> {
-  const { data, error } = await supabase.from('people').select('*');
-  if (error) { console.error('Failed to fetch all people:', error); return []; }
-  return data || [];
+  // Use pagination to handle large datasets efficiently
+  let allData: any[] = [];
+  let page = 0;
+  const PAGE_SIZE = 1000;
+  
+  while (true) {
+    const { data, error } = await supabase
+      .from('people')
+      .select('*')
+      .eq('status', 'approved')
+      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+    if (error) { console.error('Failed to fetch people page:', error); break; }
+    if (!data || data.length === 0) break;
+    allData = allData.concat(data);
+    if (data.length < PAGE_SIZE) break;
+    page++;
+  }
+  return allData;
 }
 
 export async function savePersonToCloud(p: any): Promise<void> {
@@ -179,12 +210,25 @@ export async function fetchAdmins(): Promise<any[]> {
 }
 
 export async function saveAdminToCloud(admin: any): Promise<void> {
+  // Try saving with created_by first
   const { error } = await supabase.from('admins').upsert({
     id: admin.id, username: admin.username, password_hash: admin.password_hash,
     display_name: admin.display_name, bio: admin.bio || null, contact: admin.contact || null,
     role: admin.role, status: admin.status, editable_genealogies: admin.editable_genealogies || [],
-    created_at: admin.created_at,
+    created_at: admin.created_at, created_by: admin.created_by || null,
   }, { onConflict: 'id' });
+  
+  // If created_by column doesn't exist, retry without it
+  if (error && error.code === 'PGRST204') {
+    const { error: retryError } = await supabase.from('admins').upsert({
+      id: admin.id, username: admin.username, password_hash: admin.password_hash,
+      display_name: admin.display_name, bio: admin.bio || null, contact: admin.contact || null,
+      role: admin.role, status: admin.status, editable_genealogies: admin.editable_genealogies || [],
+      created_at: admin.created_at,
+    }, { onConflict: 'id' });
+    if (retryError) console.error('Failed to save admin:', retryError);
+    return;
+  }
   if (error) console.error('Failed to save admin:', error);
 }
 
