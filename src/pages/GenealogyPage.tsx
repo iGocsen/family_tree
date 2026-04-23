@@ -42,13 +42,30 @@ export default function GenealogyPage() {
     if (Object.keys(people).length === 0) return [];
     const chain = getAncestorChainForPerson(selectedPerson);
     const ancestorAtMinGen = chain.find(p => p.generation === minGen);
-    if (!ancestorAtMinGen) return [];
-    if (minGen === 1) return getLocalPersonsByGeneration(1);
-    const ancestorParentId = ancestorAtMinGen.parentId;
-    if (ancestorParentId) {
-      return getLocalPersonsByGeneration(minGen).filter(p => p.parentId === ancestorParentId);
+    
+    if (ancestorAtMinGen) {
+      // Found ancestor at minGen - return this ancestor and their siblings
+      if (minGen === 1) return getLocalPersonsByGeneration(1);
+      const ancestorParentId = ancestorAtMinGen.parentId;
+      if (ancestorParentId) {
+        return getLocalPersonsByGeneration(minGen).filter(p => p.parentId === ancestorParentId);
+      }
+      return [ancestorAtMinGen];
     }
-    return [ancestorAtMinGen];
+
+    // No ancestor at minGen - the chain doesn't go back that far
+    // Use the oldest ancestor in the chain as the root
+    const oldestAncestor = chain[0];
+    if (oldestAncestor) {
+      // If the oldest ancestor has a parent, try to find their siblings
+      if (oldestAncestor.parentId) {
+        const siblings = getLocalPersonsByGeneration(oldestAncestor.generation).filter(p => p.parentId === oldestAncestor.parentId);
+        if (siblings.length > 0) return siblings;
+      }
+      return [oldestAncestor];
+    }
+
+    return [];
   }, [people, getLocalPersonsByGeneration]);
 
   const getAncestorChainForPerson = useCallback((person: Person): Person[] => {
