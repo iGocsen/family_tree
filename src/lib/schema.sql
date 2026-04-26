@@ -11,7 +11,6 @@ CREATE TABLE IF NOT EXISTS genealogies (
   description TEXT DEFAULT '',
   origin TEXT DEFAULT '',
   founding_year TEXT DEFAULT '',
-  ancestor JSONB,
   is_base BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -100,23 +99,19 @@ CREATE TABLE IF NOT EXISTS admins (
   display_name TEXT NOT NULL,
   bio TEXT,
   contact TEXT,
-  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('super', 'manager', 'editor')),
+  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('super', 'manager', 'admin', 'editor')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   editable_genealogies JSONB DEFAULT '[]'::jsonb,
-  created_by TEXT,
+  created_by TEXT REFERENCES admins(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ===== Indexes for Performance =====
 CREATE INDEX IF NOT EXISTS idx_people_genealogy ON people(genealogy_id);
-CREATE INDEX IF NOT EXISTS idx_people_generation ON people(genealogy_id, generation);
-CREATE INDEX IF NOT EXISTS idx_people_status ON people(genealogy_id, status);
+CREATE INDEX IF NOT EXISTS idx_people_generation ON people(generation);
+CREATE INDEX IF NOT EXISTS idx_people_status ON people(status);
 CREATE INDEX IF NOT EXISTS idx_person_add_genealogy ON person_add(genealogy_id);
-CREATE INDEX IF NOT EXISTS idx_people_genealogy_id ON people(genealogy_id);
-CREATE INDEX IF NOT EXISTS idx_people_parent_id ON people(parent_id);
 CREATE INDEX IF NOT EXISTS idx_person_add_status ON person_add(status);
-CREATE INDEX IF NOT EXISTS idx_person_edits_status ON person_edits(status);
-CREATE INDEX IF NOT EXISTS idx_person_edits_genealogy ON person_edits(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_gnlogy_intru_genealogy ON gnlogy_intru(genealogy_id);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_status ON feedbacks(status);
 CREATE INDEX IF NOT EXISTS idx_feedbacks_genealogy ON feedbacks(genealogy_id);
@@ -163,27 +158,14 @@ ON CONFLICT (id) DO NOTHING;
 -- ('chen', '陈氏族谱', '陈氏一族自清康熙年间自河南迁居四川成都，以农桑为本。九代传承，族中人才辈出，涵盖农业、茶叶、林业、政治、金融等诸多领域。', '河南 → 四川成都', '1700', true, NOW())
 -- ON CONFLICT (id) DO NOTHING;
 
--- ==========================================
--- 已有数据库迁移：添加缺失的列
--- ==========================================
-
--- 添加 created_by 列（如果不存在）
+-- ===== Migration: Add created_by column if not exists =====
 DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'admins' AND column_name = 'created_by'
   ) THEN
-    ALTER TABLE admins ADD COLUMN created_by TEXT;
-  END IF;
-END $$;
-
--- 创建 created_by 索引（如果不存在）
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_indexes WHERE indexname = 'idx_admins_created_by'
-  ) THEN
+    ALTER TABLE admins ADD COLUMN created_by TEXT REFERENCES admins(id);
     CREATE INDEX idx_admins_created_by ON admins(created_by);
   END IF;
 END $$;

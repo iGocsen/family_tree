@@ -496,6 +496,23 @@ function setAdminCreatedBy(adminId: string, creatorId: string): void {
   localStorage.setItem(ADMIN_CREATION_KEY, JSON.stringify(map));
 }
 
+// Remove admin creation relationship
+function removeAdminCreatedBy(adminId: string): void {
+  const map = getAdminCreationMap();
+  delete map[adminId];
+  localStorage.setItem(ADMIN_CREATION_KEY, JSON.stringify(map));
+}
+
+// Get all descendants of an admin (recursive)
+function getAdminDescendants(adminId: string, allAdmins: AdminUser[]): AdminUser[] {
+  const children = allAdmins.filter(a => a.createdBy === adminId);
+  let result: AdminUser[] = [...children];
+  for (const child of children) {
+    result = [...result, ...getAdminDescendants(child.id, allAdmins)];
+  }
+  return result;
+}
+
 function getDefaultAdmins(): AdminUser[] {
   return [{ id: 'default', username: 'admin', password: 'password', displayName: '超级管理员', role: 'super', status: 'active', editableGenealogies: [], createdAt: new Date().toISOString() }];
 }
@@ -512,6 +529,12 @@ export function getAdmins(): AdminUser[] {
 export async function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<AdminUser> {
   const newAdmin: AdminUser = { ...admin, id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, createdAt: admin.createdAt || new Date().toISOString() };
   const idx = adminsCache.findIndex(a => a.id === newAdmin.id);
+  
+  // If updating existing admin and password is empty, preserve the old password
+  if (idx >= 0 && !newAdmin.password) {
+    newAdmin.password = adminsCache[idx].password;
+  }
+  
   if (idx >= 0) adminsCache[idx] = newAdmin; else adminsCache.push(newAdmin);
   
   // Persist createdBy to localStorage as fallback (in case Supabase doesn't have created_by column)
@@ -531,6 +554,7 @@ export async function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { i
 export async function deleteAdmin(id: string): Promise<void> {
   if (id === 'default') return;
   adminsCache = adminsCache.filter(a => a.id !== id);
+  removeAdminCreatedBy(id);
   await deleteAdminFromCloud(id);
 }
 
@@ -545,4 +569,36 @@ export async function updateAdminStatus(id: string, status: 'active' | 'disabled
     status, editable_genealogies: adminsCache[idx]?.editableGenealogies || [],
     created_at: adminsCache[idx]?.createdAt || '', created_by: adminsCache[idx]?.createdBy || null,
   });
+}
+
+// Update editable genealogies for an admin and propagate to descendants
+export async function propagateGenealogyPermission(adminId: string, genealogyIds: string[], addGenealogyId?: string): Promise<void> {
+  const allAdmins = getAdmins();
+  const admin = allAdmins.find(a => a.id === adminId);
+  if (!admin) return;
+  
+  let newIds = [...(admin.editableGenealogies || [])];
+  if (addGenealogyId && !newIds.includes(addGenealogyId)) {
+    newIds.push(addGenealogyId);
+  } else if (genealogyIds.length > 0) {
+    newIds = genealogyIds;
+  }
+  
+  // Update the admin itself
+  await saveAdmin({ ...admin, editableGenealogies: newIds });
+  
+  // Propagate to all descendants (managers and editors)
+  const descendants = getAdminDescendants(adminId, allAdmins);
+  for (const desc of descendants) {
+    const descIds = [...(desc.editableGenealogies || [])];
+    if (addGenealogyId && !descIds.includes(addGenealogyId)) {
+      descIds.push(addGenealogyId);
+    } else if (genealogyIds.length > 0) {
+      // For propagation, merge with existing
+      for (const id of newIds) {
+        if (!descIds.includes(id)) descIds.push(id);
+      }
+    }
+    await saveAdmin({ ...desc, editableGenealogies: descIds });
+  }
 }
