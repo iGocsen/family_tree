@@ -1,3 +1,4 @@
+import vesaDesignMode from './.vesa/vite-design-mode-plugin.js';
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import tailwindcss from "@tailwindcss/vite";
@@ -13,7 +14,7 @@ export default defineConfig(({ mode }) => ({
       overlay: false,
     },
   },
-  plugins: [vesaErrorReporter(), tailwindcss(), react()].filter(Boolean),
+  plugins: [vesaDesignMode(), vesaErrorReporter(), tailwindcss(), react()].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

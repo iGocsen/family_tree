@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS admins (
   display_name TEXT NOT NULL,
   bio TEXT,
   contact TEXT,
-  role TEXT NOT NULL DEFAULT 'manager' CHECK (role IN ('super', 'manager', 'admin', 'editor')),
+  role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super', 'manager', 'admin', 'editor')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   editable_genealogies JSONB DEFAULT '[]'::jsonb,
   created_by TEXT REFERENCES admins(id),

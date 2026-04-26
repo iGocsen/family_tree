@@ -204,7 +204,11 @@ export async function deleteEditFromCloud(id: string): Promise<void> {
 
 // ===== Admins =====
 export async function fetchAdmins(): Promise<any[]> {
-  const { data, error } = await supabase.from('admins').select('*').order('created_at', { ascending: false });
+  // Exclude password_hash from response for security
+  const { data, error } = await supabase
+    .from('admins')
+    .select('id, username, display_name, bio, contact, role, status, editable_genealogies, created_by, created_at')
+    .order('created_at', { ascending: false });
   if (error) { console.error('Failed to fetch admins:', error); return []; }
   return data || [];
 }

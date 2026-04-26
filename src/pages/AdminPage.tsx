@@ -92,27 +92,29 @@ function AdminPageInner() {
   const currentUser = allAdmins.find(a => a.id === currentUserId);
   const isSuperAdmin = currentUser?.role === 'super';
   const isManager = currentUser?.role === 'manager';
+  const isAdmin = currentUser?.role === 'admin';
   const isEditor = currentUser?.role === 'editor';
 
   // ===== Permission Inheritance Logic =====
-  // For super admin: has all permissions
-  // For manager: effective genealogy permission = their editableGenealogies + all genealogies they created (directly or indirectly through sub-managers)
-  // For editor: effective genealogy permission = only their editableGenealogies
+  // 4-tier hierarchy: super → manager → admin → editor
+  // - super: all permissions
+  // - manager: can create admin/editor, manage their creations and descendants
+  // - admin: can manage editors (created by same manager), cannot create genealogies
+  // - editor: only assigned genealogies
+
   const getEffectiveGenealogyIds = (adminId: string): string[] => {
     const admin = allAdmins.find(a => a.id === adminId);
     if (!admin) return [];
-    if (admin.role === 'super') return []; // empty means all
+    if (admin.role === 'super') return [];
     
-    // Start with own editable genealogies
     let ids = new Set<string>(admin.editableGenealogies || []);
     
-    // If manager, also include all genealogies created by admins they created (recursive)
-    if (admin.role === 'manager') {
+    // Manager and admin: collect genealogies from their descendants
+    if (admin.role === 'manager' || admin.role === 'admin') {
       const collectDescendantGenealogies = (parentId: string) => {
         const children = allAdmins.filter(a => a.createdBy === parentId);
         for (const child of children) {
           (child.editableGenealogies || []).forEach(id => ids.add(id));
-          // Recursively collect from descendants
           collectDescendantGenealogies(child.id);
         }
       };
@@ -126,22 +128,74 @@ function AdminPageInner() {
   const hasGenealogyPermission = (genealogyId: string) => isSuperAdmin || editableGenealogyIds.includes(genealogyId);
   const canManageAdmins = isSuperAdmin || isManager;
   
-  // For manager: can only manage admins they created directly
+  // Determine if current user can manage a specific admin
+  // - super: all
+  // - manager: their direct creations (admin, editor) + editors created by their admins
+  // - admin: editors created by the same manager (siblings) + their own creations
   const canManageAdmin = (admin: typeof admins[number]) => {
     if (isSuperAdmin) return true;
-    if (isManager && admin.createdBy === currentUserId) return true;
+    if (isManager) {
+      // Manager can manage their direct creations
+      if (admin.createdBy === currentUserId) return true;
+      // Manager can manage editors created by their admins
+      if (admin.role === 'editor') {
+        const creator = admins.find(a => a.id === admin.createdBy);
+        if (creator && creator.createdBy === currentUserId) return true;
+      }
+      return false;
+    }
+    if (isAdmin) {
+      // Admin can manage editors created by the same manager (sibling editors)
+      if (admin.role === 'editor') {
+        const myCreator = currentUser?.createdBy;
+        const theirCreator = admin.createdBy;
+        if (myCreator && theirCreator === myCreator) return true;
+        // Admin can manage their own creations
+        if (admin.createdBy === currentUserId) return true;
+      }
+      return false;
+    }
     return false;
   };
-  
-  // Check if current user can process a record (feedback/edit/newPerson) based on genealogy permission
-  // Super admin: all; Manager: their effective genealogy scope; Editor: only their editable genealogies
+
+  // Get all visible admins for current user
+  const getVisibleAdmins = (): typeof admins => {
+    if (isSuperAdmin) return admins;
+    if (isManager) {
+      // Manager sees: self + all descendants (recursive)
+      const isInTree = (id: string, rootId: string): boolean => {
+        const a = admins.find(x => x.id === id);
+        if (!a) return false;
+        if (a.createdBy === rootId) return true;
+        if (!a.createdBy) return false;
+        return isInTree(a.createdBy, rootId);
+      };
+      return admins.filter(a => a.id === currentUserId || isInTree(a.id, currentUserId));
+    }
+    if (isAdmin) {
+      // Admin sees: self + sibling admins (same creator) + all editors created by same manager
+      const myCreator = currentUser?.createdBy;
+      return admins.filter(a => {
+        if (a.id === currentUserId) return true;
+        // Sibling admins
+        if (a.role === 'admin' && a.createdBy === myCreator) return true;
+        // Editors created by same manager
+        if (a.role === 'editor') {
+          const editorCreator = a.createdBy;
+          if (editorCreator === myCreator) return true;
+          // Editors created by sibling admins
+          const creator = admins.find(x => x.id === editorCreator);
+          if (creator && creator.createdBy === myCreator) return true;
+        }
+        return false;
+      });
+    }
+    return [];
+  };
+
+  // Check if current user can process a record based on genealogy permission
   const canProcessRecord = (genealogyId: string) => {
     if (isSuperAdmin) return true;
-    if (isManager) {
-      // Manager can process records in their effective genealogy scope
-      return editableGenealogyIds.includes(genealogyId);
-    }
-    // Editor: only their own editable genealogies
     return editableGenealogyIds.includes(genealogyId);
   };
 
@@ -193,7 +247,7 @@ function AdminPageInner() {
   // Admin management
   const [admins, setAdmins] = useState(getAdmins());
   const [showAdminForm, setShowAdminForm] = useState(false);
-  const [adminForm, setAdminForm] = useState({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager' as 'super' | 'manager' | 'editor', status: 'active' as 'active' | 'disabled', editableGenealogies: [] as string[] });
+  const [adminForm, setAdminForm] = useState({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager' as 'super' | 'manager' | 'admin' | 'editor', status: 'active' as 'active' | 'disabled', editableGenealogies: [] as string[] });
   const [editingAdminId, setEditingAdminId] = useState<string | null>(null);
   const [syncGenealogyPermission, setSyncGenealogyPermission] = useState(false);
 
@@ -582,19 +636,18 @@ function AdminPageInner() {
     const adminData = {
       ...adminForm,
       id: adminForm.id || undefined,
-      // Preserve createdBy for existing admins, set for new ones
-      createdBy: existingAdmin?.createdBy || (isSuperAdmin || isManager ? currentUserId : undefined),
+      createdBy: existingAdmin?.createdBy || (isSuperAdmin || isManager || isAdmin ? currentUserId : undefined),
     };
     // If editing and password is empty, don't send it (preserve existing password)
     if (editingAdminId && !adminForm.password) {
       delete (adminData as any).password;
     }
     const saved = await saveAdmin(adminData);
-    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: [] });
+    setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager', status: 'active', editableGenealogies: [] });
     setSyncGenealogyPermission(false);
     setShowAdminForm(false); setEditingAdminId(null);
     
-    // Update local state immediately with the saved admin (including createdBy)
+    // Update local state immediately
     setAdmins(prev => {
       const idx = prev.findIndex(a => a.id === saved.id);
       const merged = { ...saved };
@@ -610,12 +663,10 @@ function AdminPageInner() {
       return [...prev, merged];
     });
     
-    // If sync permission is enabled and this is a new admin created by a manager,
-    // propagate the creator's genealogy permissions to this new admin
-    if (syncGenealogyPermission && isManager && !editingAdminId) {
+    // If sync permission is enabled, propagate creator's genealogy permissions to this admin
+    if (syncGenealogyPermission && (isManager || isAdmin)) {
       const creatorGenealogies = editableGenealogyIds;
       if (creatorGenealogies.length > 0) {
-        // Update the new admin's editableGenealogies to match creator's
         const updatedAdmin = { ...saved, editableGenealogies: [...creatorGenealogies] };
         await saveAdmin(updatedAdmin);
         setAdmins(prev => prev.map(a => a.id === saved.id ? { ...a, editableGenealogies: [...creatorGenealogies] } : a));
@@ -639,6 +690,7 @@ function AdminPageInner() {
 
   const handleEditAdmin = (a: any) => {
     setAdminForm({ id: a.id, username: a.username, password: '', displayName: a.displayName, bio: a.bio || '', contact: a.contact || '', role: a.role, status: a.status, editableGenealogies: a.editableGenealogies || [] });
+    setSyncGenealogyPermission(false);
     setEditingAdminId(a.id); setShowAdminForm(true);
   };
 
@@ -656,10 +708,11 @@ function AdminPageInner() {
   const handleToggleAdminStatus = (id: string) => {
     const admin = admins.find(a => a.id === id);
     if (!admin || id === 'default') return;
-    // Check permission: super admin can toggle anyone, manager can only toggle their own
     if (isManager && !canManageAdmin(admin)) return;
-    updateAdminStatus(id, admin.status === 'active' ? 'disabled' : 'active');
-    refreshData();
+    const newStatus = admin.status === 'active' ? 'disabled' : 'active';
+    // Update local state immediately
+    setAdmins(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
+    updateAdminStatus(id, newStatus);
   };
 
   if (!isLoaded) {
@@ -1075,10 +1128,14 @@ function AdminPageInner() {
               <h3 className="text-lg font-semibold text-foreground">管理员管理</h3>
               <button onClick={() => {
                 setShowAdminForm(true); setEditingAdminId(null);
-                // Super admin creating a manager: empty genealogy permissions (no inheritance)
-                // Manager creating an admin: inherit their own genealogy permissions
-                const defaultGenealogies = isManager ? editableGenealogyIds : [];
-                setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: isSuperAdmin ? 'manager' : 'editor', status: 'active', editableGenealogies: defaultGenealogies });
+                // Determine default role based on current user's role
+                let defaultRole: 'super' | 'manager' | 'admin' | 'editor' = 'editor';
+                if (isSuperAdmin) defaultRole = 'manager';
+                else if (isManager) defaultRole = 'admin';
+                else if (isAdmin) defaultRole = 'editor';
+                const defaultGenealogies = (isManager || isAdmin) ? editableGenealogyIds : [];
+                setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: defaultRole, status: 'active', editableGenealogies: defaultGenealogies });
+                setSyncGenealogyPermission(false);
               }} className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm hover:bg-primary/90 transition-colors"><UserPlus className="w-4 h-4" />新增管理员</button>
             </div>
 
@@ -1092,9 +1149,10 @@ function AdminPageInner() {
                     <div><label className="block text-sm font-medium text-foreground mb-1">显示名称 <span className="text-destructive">*</span></label><input type="text" value={adminForm.displayName} onChange={(e) => setAdminForm(prev => ({ ...prev, displayName: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" required /></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">备注/介绍</label><textarea value={adminForm.bio} onChange={(e) => setAdminForm(prev => ({ ...prev, bio: e.target.value }))} rows={2} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" /></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">联系方式</label><input type="text" value={adminForm.contact} onChange={(e) => setAdminForm(prev => ({ ...prev, contact: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
-                    <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'manager' | 'editor' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
+                    <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'manager' | 'admin' | 'editor' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
                       {isSuperAdmin && <option value="super">超级管理员</option>}
-                      <option value="manager">普通管理员</option>
+                      {(isSuperAdmin || isManager) && <option value="manager">普通管理员</option>}
+                      {(isSuperAdmin || isManager) && <option value="admin">管理员</option>}
                       <option value="editor">族谱修订员</option>
                     </select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">状态</label><select value={adminForm.status} onChange={(e) => setAdminForm(prev => ({ ...prev, status: e.target.value as 'active' | 'disabled' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="active">启用</option><option value="disabled">停用</option></select></div>
@@ -1118,7 +1176,13 @@ function AdminPageInner() {
                         ))}
                       </div>
                     </div>
-                    {!editingAdminId && isManager && (
+                    {!editingAdminId && (isManager || isAdmin) && (
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={syncGenealogyPermission} onChange={(e) => setSyncGenealogyPermission(e.target.checked)} className="rounded border-border" />
+                        <span className="text-foreground">自动同步我的族谱编辑权限给此账号</span>
+                      </label>
+                    )}
+                    {editingAdminId && (isManager || isAdmin) && (
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={syncGenealogyPermission} onChange={(e) => setSyncGenealogyPermission(e.target.checked)} className="rounded border-border" />
                         <span className="text-foreground">自动同步我的族谱编辑权限给此账号</span>
@@ -1132,52 +1196,14 @@ function AdminPageInner() {
 
             <div className="space-y-3">
               {(() => {
-                // Build admin hierarchy for display
-                // For manager: show self + all descendants (recursive tree)
-                // For super admin: show all admins
+                const visibleAdmins = getVisibleAdmins();
                 const getAdminLevel = (adminId: string, depth = 0): number => {
                   const admin = admins.find(a => a.id === adminId);
                   if (!admin || !admin.createdBy) return depth;
                   return getAdminLevel(admin.createdBy, depth + 1);
                 };
 
-                const canManageThisAdmin = (admin: typeof admins[number]) => {
-                  if (isSuperAdmin) return true;
-                  if (isManager) {
-                    // Can manage admins they created directly
-                    if (admin.createdBy === currentUserId) return true;
-                    // Can manage lower-level editors (descendants of their direct creations)
-                    const getCreatorDepth = (id: string, d = 0): number => {
-                      const a = admins.find(x => x.id === id);
-                      if (!a || !a.createdBy) return d;
-                      return getCreatorDepth(a.createdBy, d + 1);
-                    };
-                    const adminDepth = getCreatorDepth(admin.id);
-                    const currentDepth = getCreatorDepth(currentUserId);
-                    if (adminDepth > currentDepth && admin.role === 'editor') return true;
-                    return false;
-                  }
-                  return false;
-                };
-
-                const visibleAdmins = admins.filter(admin => {
-                  if (isSuperAdmin) return true;
-                  if (isManager) {
-                    // Show self
-                    if (admin.id === currentUserId) return true;
-                    // Show all descendants (recursive)
-                    const isInTree = (id: string, rootId: string): boolean => {
-                      const a = admins.find(x => x.id === id);
-                      if (!a) return false;
-                      if (a.createdBy === rootId) return true;
-                      if (!a.createdBy) return false;
-                      return isInTree(a.createdBy, rootId);
-                    };
-                    return isInTree(admin.id, currentUserId);
-                  }
-                  return false;
-                }).sort((a, b) => {
-                  // Sort: current user first, then by creation hierarchy
+                const sortedAdmins = [...visibleAdmins].sort((a, b) => {
                   if (a.id === currentUserId) return -1;
                   if (b.id === currentUserId) return 1;
                   const levelA = getAdminLevel(a.id);
@@ -1185,11 +1211,12 @@ function AdminPageInner() {
                   return levelA - levelB;
                 });
 
-                return visibleAdmins.map(admin => {
+                return sortedAdmins.map(admin => {
                   const isCurrentUser = admin.id === currentUserId;
                   const level = getAdminLevel(admin.id);
-                  const indent = isSuperAdmin ? 0 : Math.max(0, level - getAdminLevel(currentUserId));
-                  const canManage = canManageThisAdmin(admin);
+                  const baseLevel = isSuperAdmin ? 0 : getAdminLevel(currentUserId);
+                  const indent = Math.max(0, level - baseLevel);
+                  const canManage = canManageAdmin(admin);
 
                   return (
                 <div key={admin.id} className={`bg-card border border-border rounded-xl p-5 ${isCurrentUser ? 'ring-2 ring-primary/20' : ''}`} style={{ marginLeft: `${indent * 24}px` }}>
@@ -1201,6 +1228,7 @@ function AdminPageInner() {
                           <h4 className="text-sm font-semibold text-foreground">{admin.displayName}</h4>
                           {admin.role === 'super' && <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded">超级管理员</span>}
                           {admin.role === 'manager' && <span className="text-xs px-1.5 py-0.5 bg-accent/10 text-accent rounded">普通管理员</span>}
+                          {admin.role === 'admin' && <span className="text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">管理员</span>}
                           {admin.role === 'editor' && <span className="text-xs px-1.5 py-0.5 bg-secondary text-secondary-foreground rounded">族谱修订员</span>}
                           {admin.status === 'disabled' && <span className="text-xs px-1.5 py-0.5 bg-destructive/10 text-destructive rounded">已停用</span>}
                           {isCurrentUser && <span className="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded">当前账号</span>}
