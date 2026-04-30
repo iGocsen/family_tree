@@ -204,7 +204,7 @@ export async function deleteEditFromCloud(id: string): Promise<void> {
 
 // ===== Admins =====
 export async function fetchAdmins(): Promise<any[]> {
-  // Exclude password_hash from response for security
+  // Query the secure table with column-level grants (password_hash excluded)
   const { data, error } = await supabase
     .from('admins')
     .select('id, username, display_name, bio, contact, role, status, editable_genealogies, created_by, created_at')

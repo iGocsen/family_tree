@@ -129,9 +129,13 @@ function AdminPageInner() {
   const canManageAdmins = isSuperAdmin || isManager;
   
   // Determine if current user can manage a specific admin
-  // - super: all
-  // - manager: their direct creations (admin, editor) + editors created by their admins
-  // - admin: editors created by the same manager (siblings) + their own creations
+  // Hierarchy: super → manager → admin → editor
+  // - super: can manage all
+  // - manager: can manage direct creations (admin, editor) + editors created by their admins
+  // - admin: can ONLY manage editors (族谱修订员)
+  //   - editors created by same manager (sibling editors)
+  //   - editors created by sibling admins (other admins under same manager)
+  //   - editors created by self
   const canManageAdmin = (admin: typeof admins[number]) => {
     if (isSuperAdmin) return true;
     if (isManager) {
@@ -145,14 +149,16 @@ function AdminPageInner() {
       return false;
     }
     if (isAdmin) {
-      // Admin can manage editors created by the same manager (sibling editors)
-      if (admin.role === 'editor') {
-        const myCreator = currentUser?.createdBy;
-        const theirCreator = admin.createdBy;
-        if (myCreator && theirCreator === myCreator) return true;
-        // Admin can manage their own creations
-        if (admin.createdBy === currentUserId) return true;
-      }
+      // Admin can ONLY manage editors (族谱修订员)
+      if (admin.role !== 'editor') return false;
+      const myCreator = currentUser?.createdBy;
+      // Editors created by the same manager (普通管理员直创的族谱修订员)
+      if (admin.createdBy === myCreator) return true;
+      // Editors created by sibling admins (同一个普通管理员创建的其他管理员创建的族谱修订员)
+      const editorCreator = admins.find(x => x.id === admin.createdBy);
+      if (editorCreator && editorCreator.createdBy === myCreator) return true;
+      // Editors created by self
+      if (admin.createdBy === currentUserId) return true;
       return false;
     }
     return false;
@@ -162,7 +168,7 @@ function AdminPageInner() {
   const getVisibleAdmins = (): typeof admins => {
     if (isSuperAdmin) return admins;
     if (isManager) {
-      // Manager sees: self + all descendants (recursive)
+      // Manager sees: self + all descendants (recursive tree)
       const isInTree = (id: string, rootId: string): boolean => {
         const a = admins.find(x => x.id === id);
         if (!a) return false;
@@ -173,19 +179,26 @@ function AdminPageInner() {
       return admins.filter(a => a.id === currentUserId || isInTree(a.id, currentUserId));
     }
     if (isAdmin) {
-      // Admin sees: self + sibling admins (same creator) + all editors created by same manager
+      // Admin sees:
+      // - self
+      // - sibling admins (same creator = same 普通管理员)
+      // - editors created by same manager (普通管理员直创)
+      // - editors created by sibling admins (同级管理员创建的族谱修订员)
+      // - editors created by self
       const myCreator = currentUser?.createdBy;
       return admins.filter(a => {
         if (a.id === currentUserId) return true;
-        // Sibling admins
+        // Sibling admins (same 普通管理员)
         if (a.role === 'admin' && a.createdBy === myCreator) return true;
-        // Editors created by same manager
+        // Editors
         if (a.role === 'editor') {
-          const editorCreator = a.createdBy;
-          if (editorCreator === myCreator) return true;
-          // Editors created by sibling admins
-          const creator = admins.find(x => x.id === editorCreator);
+          // Created by same 普通管理员
+          if (a.createdBy === myCreator) return true;
+          // Created by sibling admin
+          const creator = admins.find(x => x.id === a.createdBy);
           if (creator && creator.createdBy === myCreator) return true;
+          // Created by self
+          if (a.createdBy === currentUserId) return true;
         }
         return false;
       });
@@ -633,15 +646,19 @@ function AdminPageInner() {
     e.preventDefault();
     if (!adminForm.username || !adminForm.displayName) return;
     const existingAdmin = admins.find(a => a.id === adminForm.id);
-    const adminData = {
+    
+    // Build the admin data to save
+    const adminData: any = {
       ...adminForm,
       id: adminForm.id || undefined,
       createdBy: existingAdmin?.createdBy || (isSuperAdmin || isManager || isAdmin ? currentUserId : undefined),
     };
-    // If editing and password is empty, don't send it (preserve existing password)
+    
+    // If editing and password is empty, don't include it in the save (preserve existing password)
     if (editingAdminId && !adminForm.password) {
-      delete (adminData as any).password;
+      delete adminData.password;
     }
+    
     const saved = await saveAdmin(adminData);
     setAdminForm({ id: '', username: '', password: '', displayName: '', bio: '', contact: '', role: 'manager', status: 'active', editableGenealogies: [] });
     setSyncGenealogyPermission(false);
@@ -696,21 +713,32 @@ function AdminPageInner() {
 
   const handleDeleteAdmin = (id: string) => {
     if (id === 'default') return;
-    // Check permission: super admin can delete anyone, manager can only delete their own
-    if (isManager && !canManageAdmin(admins.find(a => a.id === id)!)) return;
+    // Check permission: super/manager/admin can only delete if they have management rights
+    if ((isManager || isAdmin) && !canManageAdmin(admins.find(a => a.id === id)!)) return;
     confirmAction('删除管理员', '确定要删除此管理员账户吗？此操作不可恢复。', async () => {
-      // Update local state immediately
       setAdmins(prev => prev.filter(a => a.id !== id));
-      await deleteAdmin(id); await refreshData();
+      await deleteAdmin(id);
+      await refreshAllData();
+      setFeedbacks(getFeedbacks());
+      setEdits(getPersonEdits());
+      setNewPersons(getNewPersons());
+      setStats(getStats());
+      setAdmins(getAdmins());
+      const genealogies = getSupabaseGenealogies();
+      setAllGenealogies(genealogies);
+      const personsMap: Record<string, Person[]> = {};
+      for (const g of genealogies) {
+        personsMap[g.id] = getPeopleByGenealogy(g.id);
+      }
+      setAllPersons(personsMap);
     });
   };
 
   const handleToggleAdminStatus = (id: string) => {
     const admin = admins.find(a => a.id === id);
     if (!admin || id === 'default') return;
-    if (isManager && !canManageAdmin(admin)) return;
+    if ((isManager || isAdmin) && !canManageAdmin(admin)) return;
     const newStatus = admin.status === 'active' ? 'disabled' : 'active';
-    // Update local state immediately
     setAdmins(prev => prev.map(a => a.id === id ? { ...a, status: newStatus } : a));
     updateAdminStatus(id, newStatus);
   };
@@ -1151,9 +1179,9 @@ function AdminPageInner() {
                     <div><label className="block text-sm font-medium text-foreground mb-1">联系方式</label><input type="text" value={adminForm.contact} onChange={(e) => setAdminForm(prev => ({ ...prev, contact: e.target.value }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" /></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">角色</label><select value={adminForm.role} onChange={(e) => setAdminForm(prev => ({ ...prev, role: e.target.value as 'super' | 'manager' | 'admin' | 'editor' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary">
                       {isSuperAdmin && <option value="super">超级管理员</option>}
-                      {(isSuperAdmin || isManager) && <option value="manager">普通管理员</option>}
+                      {isSuperAdmin && <option value="manager">普通管理员</option>}
                       {(isSuperAdmin || isManager) && <option value="admin">管理员</option>}
-                      <option value="editor">族谱修订员</option>
+                      {(isSuperAdmin || isManager || isAdmin) && <option value="editor">族谱修订员</option>}
                     </select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">状态</label><select value={adminForm.status} onChange={(e) => setAdminForm(prev => ({ ...prev, status: e.target.value as 'active' | 'disabled' }))} className="w-full px-4 py-2 bg-secondary border border-border rounded-lg text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"><option value="active">启用</option><option value="disabled">停用</option></select></div>
                     <div><label className="block text-sm font-medium text-foreground mb-1">可编辑族谱（留空=全部）</label>

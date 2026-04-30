@@ -33,12 +33,12 @@ CREATE TABLE IF NOT EXISTS people (
   generation INTEGER NOT NULL,
   birth_year TEXT DEFAULT '',
   death_year TEXT DEFAULT '',
-  gender TEXT NOT NULL DEFAULT 'male' CHECK (gender IN ('male', 'female')),
+  gender TEXT NOT NULL DEFAULT 'male',
   spouse TEXT DEFAULT '',
   parent_id TEXT DEFAULT '',
   biography TEXT DEFAULT '',
   achievements TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'rejected')),
+  status TEXT NOT NULL DEFAULT 'approved',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -50,12 +50,12 @@ CREATE TABLE IF NOT EXISTS person_add (
   generation INTEGER NOT NULL,
   birth_year TEXT DEFAULT '',
   death_year TEXT DEFAULT '',
-  gender TEXT NOT NULL DEFAULT 'male' CHECK (gender IN ('male', 'female')),
+  gender TEXT NOT NULL DEFAULT 'male',
   spouse TEXT DEFAULT '',
   parent_id TEXT DEFAULT '',
   biography TEXT DEFAULT '',
   achievements TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  status TEXT NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS person_edits (
   field TEXT NOT NULL,
   old_value TEXT NOT NULL,
   new_value TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  status TEXT NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -82,10 +82,10 @@ CREATE TABLE IF NOT EXISTS feedbacks (
   person_name TEXT NOT NULL,
   person_generation INTEGER DEFAULT 0,
   person_biography TEXT DEFAULT '',
-  feedback_type TEXT NOT NULL CHECK (feedback_type IN ('info-error', 'missing-info', 'duplicate', 'other')),
+  feedback_type TEXT NOT NULL,
   description TEXT NOT NULL,
   contact TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'resolved', 'rejected')),
+  status TEXT NOT NULL DEFAULT 'pending',
   admin_note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   resolved_at TIMESTAMPTZ
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS admins (
   bio TEXT,
   contact TEXT,
   role TEXT NOT NULL DEFAULT 'admin' CHECK (role IN ('super', 'manager', 'admin', 'editor')),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  status TEXT NOT NULL DEFAULT 'active',
   editable_genealogies JSONB DEFAULT '[]'::jsonb,
   created_by TEXT REFERENCES admins(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -135,7 +135,6 @@ CREATE POLICY "Allow anonymous read access to people" ON people FOR SELECT USING
 CREATE POLICY "Allow anonymous read access to person_add" ON person_add FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous read access to person_edits" ON person_edits FOR SELECT USING (true);
 CREATE POLICY "Allow anonymous read access to feedbacks" ON feedbacks FOR SELECT USING (true);
-CREATE POLICY "Allow anonymous read access to admins" ON admins FOR SELECT USING (true);
 
 -- Allow anonymous write access (for simplicity, can be restricted later with auth)
 CREATE POLICY "Allow anonymous write access to genealogies" ON genealogies FOR ALL USING (true);
@@ -159,13 +158,30 @@ ON CONFLICT (id) DO NOTHING;
 -- ON CONFLICT (id) DO NOTHING;
 
 -- ===== Migration: Add created_by column if not exists =====
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'admins' AND column_name = 'created_by'
-  ) THEN
-    ALTER TABLE admins ADD COLUMN created_by TEXT REFERENCES admins(id);
-    CREATE INDEX idx_admins_created_by ON admins(created_by);
-  END IF;
-END $$;
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS created_by TEXT REFERENCES admins(id);
+CREATE INDEX IF NOT EXISTS idx_admins_created_by ON admins(created_by);
+
+-- ===== Admins: Secure Access =====
+-- 1. 撤销所有默认权限（防止全表扫描泄露 password_hash）
+REVOKE ALL ON admins FROM PUBLIC;
+REVOKE ALL ON admins FROM anon, authenticated;
+
+-- 2. 授予列级 SELECT 权限（排除 password_hash，防止泄露）
+-- 包含 upsert 冲突检查所需的 id 列
+GRANT SELECT (id, username, display_name, bio, contact, role, status, editable_genealogies, created_by, created_at) 
+ON admins TO anon, authenticated;
+
+-- 3. 授予写入权限（upsert 需要 SELECT 冲突列 + INSERT/UPDATE/DELETE）
+GRANT INSERT, UPDATE, DELETE ON admins TO anon, authenticated;
+
+-- 4. 启用 RLS 并创建宽松策略（应用层控制逻辑权限）
+ALTER TABLE admins ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "admins_all_access" ON admins;
+CREATE POLICY "admins_all_access" ON admins FOR ALL USING (true) WITH CHECK (true);
+
+-- 5. 安全视图（用于前端读取，不含 password_hash）
+CREATE OR REPLACE VIEW admins_public AS
+SELECT id, username, display_name, bio, contact, role, status, editable_genealogies, created_by, created_at
+FROM admins;
+
+GRANT SELECT ON admins_public TO anon, authenticated;

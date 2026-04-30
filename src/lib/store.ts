@@ -526,18 +526,33 @@ export function getAdmins(): AdminUser[] {
   }))];
 }
 
-export async function saveAdmin(admin: Omit<AdminUser, 'id' | 'createdAt'> & { id?: string; createdAt?: string }): Promise<AdminUser> {
-  const newAdmin: AdminUser = { ...admin, id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, createdAt: admin.createdAt || new Date().toISOString() };
-  const idx = adminsCache.findIndex(a => a.id === newAdmin.id);
+export async function saveAdmin(admin: Partial<Omit<AdminUser, 'id' | 'createdAt'>> & { id?: string; createdAt?: string }): Promise<AdminUser> {
+  const idx = adminsCache.findIndex(a => a.id === admin.id);
   
-  // If updating existing admin and password is empty, preserve the old password
-  if (idx >= 0 && !newAdmin.password) {
-    newAdmin.password = adminsCache[idx].password;
+  // If updating existing admin, start with existing data
+  let newAdmin: AdminUser;
+  if (idx >= 0) {
+    newAdmin = { ...adminsCache[idx], ...admin, id: admin.id || adminsCache[idx].id };
+    // If password is empty/undefined in the update, preserve the old password
+    if (!admin.password) {
+      newAdmin.password = adminsCache[idx].password;
+    }
+  } else {
+    // Creating new admin
+    newAdmin = {
+      ...(admin as any),
+      id: admin.id || `admin_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: admin.createdAt || new Date().toISOString(),
+      password: admin.password || '',
+      role: admin.role || 'editor',
+      status: admin.status || 'active',
+      editableGenealogies: admin.editableGenealogies || [],
+    };
   }
   
   if (idx >= 0) adminsCache[idx] = newAdmin; else adminsCache.push(newAdmin);
   
-  // Persist createdBy to localStorage as fallback (in case Supabase doesn't have created_by column)
+  // Persist createdBy to localStorage as fallback
   if (newAdmin.createdBy) {
     setAdminCreatedBy(newAdmin.id, newAdmin.createdBy);
   }
@@ -561,14 +576,30 @@ export async function deleteAdmin(id: string): Promise<void> {
 export async function updateAdminStatus(id: string, status: 'active' | 'disabled'): Promise<void> {
   if (id === 'default') return;
   const idx = adminsCache.findIndex(a => a.id === id);
-  if (idx >= 0) { adminsCache[idx].status = status; }
-  await saveAdminToCloud({
-    id, username: adminsCache[idx]?.username || '', password_hash: adminsCache[idx]?.password || '',
-    display_name: adminsCache[idx]?.displayName || '', bio: adminsCache[idx]?.bio || null,
-    contact: adminsCache[idx]?.contact || null, role: adminsCache[idx]?.role || 'manager',
-    status, editable_genealogies: adminsCache[idx]?.editableGenealogies || [],
-    created_at: adminsCache[idx]?.createdAt || '', created_by: adminsCache[idx]?.createdBy || null,
-  });
+  if (idx < 0) return;
+  
+  // Update local cache
+  adminsCache[idx].status = status;
+  
+  const existing = adminsCache[idx];
+  // Build update payload, preserving original password and role
+  const adminData: any = {
+    id,
+    username: existing.username,
+    display_name: existing.displayName,
+    bio: existing.bio || null,
+    contact: existing.contact || null,
+    role: existing.role,
+    status,
+    editable_genealogies: existing.editableGenealogies || [],
+    created_at: existing.createdAt,
+    created_by: existing.createdBy || null,
+  };
+  // Only include password_hash if it exists (never overwrite with empty string)
+  if (existing.password) {
+    adminData.password_hash = existing.password;
+  }
+  await saveAdminToCloud(adminData);
 }
 
 // Update editable genealogies for an admin and propagate to descendants
